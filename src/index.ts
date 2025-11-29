@@ -13,6 +13,7 @@ async function main() {
   console.log(`  WebSocket Port: ${config.wsPort}`);
   console.log(`  Anvil RPC URL: ${config.anvilRpcUrl}`);
   console.log(`  Chain ID: ${config.chainId}`);
+  console.log(`  Account Index: ${config.accountIndex}`);
 
   // Create wallet
   const wallet = new Wallet(config);
