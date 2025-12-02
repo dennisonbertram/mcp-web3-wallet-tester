@@ -12,6 +12,7 @@ import {
 import { privateKeyToAccount } from 'viem/accounts';
 import { foundry } from 'viem/chains';
 import type { WalletServerConfig, TransactionParams } from './types.js';
+import { ANVIL_ACCOUNTS } from './types.js';
 
 /**
  * Wallet wrapper using Viem for Ethereum operations
@@ -21,9 +22,13 @@ export class Wallet {
   private publicClient: PublicClient;
   private account: ReturnType<typeof privateKeyToAccount>;
   private chain: Chain;
+  private rpcUrl: string;
+  private currentAccountIndex: number;
 
   constructor(config: WalletServerConfig) {
     this.account = privateKeyToAccount(config.privateKey);
+    this.rpcUrl = config.anvilRpcUrl;
+    this.currentAccountIndex = config.accountIndex;
 
     // Create a custom chain definition for Anvil
     this.chain = {
@@ -41,6 +46,58 @@ export class Wallet {
       chain: this.chain,
       transport: http(config.anvilRpcUrl),
     });
+  }
+
+  /**
+   * Switch to a different Anvil account by index (0-9)
+   */
+  switchAccount(accountIndex: number): void {
+    if (accountIndex < 0 || accountIndex > 9) {
+      throw new Error(`Account index must be between 0 and 9, got ${accountIndex}`);
+    }
+
+    const newAccount = ANVIL_ACCOUNTS[accountIndex];
+    this.account = privateKeyToAccount(newAccount.privateKey);
+    this.currentAccountIndex = accountIndex;
+
+    // Recreate wallet client with new account
+    this.walletClient = createWalletClient({
+      account: this.account,
+      chain: this.chain,
+      transport: http(this.rpcUrl),
+    });
+  }
+
+  /**
+   * Switch to a custom private key
+   */
+  switchToPrivateKey(privateKey: `0x${string}`): void {
+    this.account = privateKeyToAccount(privateKey);
+    this.currentAccountIndex = -1; // Custom key, not an Anvil index
+
+    // Recreate wallet client with new account
+    this.walletClient = createWalletClient({
+      account: this.account,
+      chain: this.chain,
+      transport: http(this.rpcUrl),
+    });
+  }
+
+  /**
+   * Get the current account index (-1 if using custom private key)
+   */
+  getAccountIndex(): number {
+    return this.currentAccountIndex;
+  }
+
+  /**
+   * List all available Anvil accounts
+   */
+  static listAnvilAccounts(): Array<{ index: number; address: string }> {
+    return ANVIL_ACCOUNTS.map((acc, index) => ({
+      index,
+      address: acc.address,
+    }));
   }
 
   /**
