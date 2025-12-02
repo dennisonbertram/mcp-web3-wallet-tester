@@ -154,6 +154,18 @@ await page.goto('https://example-dapp.com');
 await page.click('button:has-text("Connect Wallet")');
 ```
 
+## MCP Resources
+
+The server exposes documentation as MCP resources that LLMs can read to understand how to use the wallet tester:
+
+| Resource URI | Description |
+|--------------|-------------|
+| `wallet://docs/instructions` | Concise LLM usage guide with step-by-step workflow and common pitfalls |
+| `wallet://docs/testing-guide` | Complete testing documentation with examples and troubleshooting |
+| `wallet://docs/tools` | List of all available MCP tools with parameters and usage patterns |
+
+LLMs can access these resources to learn how to use the wallet tester effectively.
+
 ## MCP Tools
 
 | Tool | Description |
@@ -168,6 +180,9 @@ await page.click('button:has-text("Connect Wallet")');
 | `wallet_getTransactionReceipt` | Get transaction receipt |
 | `wallet_getChainId` | Get chain ID |
 | `wallet_getStatus` | Get full wallet status |
+| `wallet_listAccounts` | List all 10 Anvil test accounts |
+| `wallet_switchAccount` | Switch to Anvil account by index (0-9) |
+| `wallet_setPrivateKey` | Switch to a custom private key |
 
 ## Example LLM Workflow
 
@@ -195,6 +210,23 @@ LLM: wallet_approveRequest({requestId: "req_2"})
 → Transaction sent to Anvil
 → dApp shows "Transaction submitted"
 ```
+
+### Account Management
+
+The LLM can dynamically switch between accounts during testing:
+
+```
+LLM: wallet_listAccounts()
+→ Returns: [{index: 0, address: "0xf39..."}, {index: 1, address: "0x709..."}, ...]
+
+LLM: wallet_switchAccount({accountIndex: 1})
+→ Returns: {success: true, accountIndex: 1, address: "0x70997970...", balance: "10000 ETH"}
+
+LLM: wallet_setPrivateKey({privateKey: "0xabcd..."})
+→ Returns: {success: true, address: "0x123...", balance: "0 ETH"}
+```
+
+This allows testing multi-user scenarios (e.g., Alice sends to Bob) without restarting the server.
 
 ## Configuration
 
