@@ -22,7 +22,7 @@
     "testing",
     "playwright"
   ],
-  "author": "",
+  "author": "Dennison Bertram <dennison@dennisonbertram.com>",
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
