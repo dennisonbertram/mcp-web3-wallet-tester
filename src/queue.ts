@@ -4,6 +4,26 @@ import { EIP1193_ERRORS } from './types.js';
 import type { Wallet } from './wallet.js';
 
 /**
+ * Subscription types supported by eth_subscribe
+ */
+type SubscriptionType = 'newHeads' | 'logs' | 'newPendingTransactions';
+
+/**
+ * Subscription info
+ */
+interface Subscription {
+  id: string;
+  type: SubscriptionType;
+  params?: unknown;
+  intervalId?: ReturnType<typeof setInterval>;
+}
+
+/**
+ * Callback for subscription notifications
+ */
+type SubscriptionCallback = (subscriptionId: string, result: unknown) => void;
+
+/**
  * Manages pending wallet requests waiting for LLM approval
  */
 export class RequestQueue {
@@ -11,9 +31,19 @@ export class RequestQueue {
   private wallet: Wallet;
   private autoApprove: boolean = false;
   private waiters: Array<(request: SerializedWalletRequest) => void> = [];
+  private subscriptions: Map<string, Subscription> = new Map();
+  private subscriptionCallback: SubscriptionCallback | null = null;
+  private lastBlockNumber: bigint | null = null;
 
   constructor(wallet: Wallet) {
     this.wallet = wallet;
+  }
+
+  /**
+   * Set the callback for subscription notifications
+   */
+  setSubscriptionCallback(callback: SubscriptionCallback): void {
+    this.subscriptionCallback = callback;
   }
 
   /**
@@ -152,6 +182,13 @@ export class RequestQueue {
   }
 
   /**
+   * Get the wallet instance (for UI state)
+   */
+  getWallet(): Wallet {
+    return this.wallet;
+  }
+
+  /**
    * Clear all pending requests (rejects them all)
    */
   clear(): void {
@@ -243,7 +280,18 @@ export class RequestQueue {
       case 'eth_getTransactionReceipt': {
         const hash = params[0] as `0x${string}`;
         const receipt = await this.wallet.getTransactionReceipt(hash);
-        return receipt;
+        if (!receipt) return null;
+        // Convert BigInt values to hex strings for JSON serialization
+        return {
+          ...receipt,
+          blockNumber: `0x${receipt.blockNumber.toString(16)}`,
+          cumulativeGasUsed: `0x${receipt.cumulativeGasUsed.toString(16)}`,
+          effectiveGasPrice: `0x${receipt.effectiveGasPrice.toString(16)}`,
+          gasUsed: `0x${receipt.gasUsed.toString(16)}`,
+          transactionIndex: receipt.transactionIndex,
+          type: receipt.type,
+          status: receipt.status,
+        };
       }
 
       case 'wallet_switchEthereumChain':
@@ -253,6 +301,17 @@ export class RequestQueue {
       case 'wallet_addEthereumChain':
         // For Anvil testing, we just accept any chain add request
         return null;
+
+      case 'eth_subscribe': {
+        const subscriptionType = params[0] as SubscriptionType;
+        const subscriptionParams = params[1];
+        return this.createSubscription(subscriptionType, subscriptionParams);
+      }
+
+      case 'eth_unsubscribe': {
+        const subscriptionId = params[0] as string;
+        return this.removeSubscription(subscriptionId);
+      }
 
       default:
         throw new Error(`Unsupported method: ${method}`);
@@ -269,5 +328,109 @@ export class RequestQueue {
       params: request.params,
       timestamp: request.timestamp,
     };
+  }
+
+  /**
+   * Create a new subscription
+   */
+  private createSubscription(type: SubscriptionType, params?: unknown): string {
+    const id = `0x${randomUUID().replace(/-/g, '').slice(0, 32)}`;
+
+    const subscription: Subscription = {
+      id,
+      type,
+      params,
+    };
+
+    // Set up polling based on subscription type
+    switch (type) {
+      case 'newHeads':
+        subscription.intervalId = setInterval(async () => {
+          try {
+            const blockNumber = await this.wallet.getBlockNumber();
+            if (this.lastBlockNumber !== null && blockNumber > this.lastBlockNumber) {
+              // New block detected - in a real implementation we'd fetch block details
+              // For testing purposes, we emit a simplified block header
+              const result = {
+                number: `0x${blockNumber.toString(16)}`,
+                hash: `0x${'0'.repeat(64)}`, // Placeholder
+                parentHash: `0x${'0'.repeat(64)}`,
+                timestamp: `0x${Math.floor(Date.now() / 1000).toString(16)}`,
+              };
+              this.notifySubscription(id, result);
+            }
+            this.lastBlockNumber = blockNumber;
+          } catch (error) {
+            console.error('[RequestQueue] Error polling for new blocks:', error);
+          }
+        }, 1000); // Poll every second
+        break;
+
+      case 'newPendingTransactions':
+        // For Anvil/testing, pending transactions are immediately mined
+        // We'll emit a notification but in practice this would need mempool access
+        subscription.intervalId = setInterval(() => {
+          // No-op for testing - Anvil doesn't have a real mempool
+        }, 2000);
+        break;
+
+      case 'logs':
+        // Log subscriptions would filter events based on params
+        // For testing, we just set up the subscription without active polling
+        // A real implementation would watch for matching logs
+        break;
+
+      default:
+        throw new Error(`Unsupported subscription type: ${type}`);
+    }
+
+    this.subscriptions.set(id, subscription);
+    return id;
+  }
+
+  /**
+   * Remove a subscription
+   */
+  private removeSubscription(subscriptionId: string): boolean {
+    const subscription = this.subscriptions.get(subscriptionId);
+    if (!subscription) {
+      return false;
+    }
+
+    // Clear any polling interval
+    if (subscription.intervalId) {
+      clearInterval(subscription.intervalId);
+    }
+
+    this.subscriptions.delete(subscriptionId);
+    return true;
+  }
+
+  /**
+   * Notify subscribers of new data
+   */
+  private notifySubscription(subscriptionId: string, result: unknown): void {
+    if (this.subscriptionCallback) {
+      this.subscriptionCallback(subscriptionId, result);
+    }
+  }
+
+  /**
+   * Clear all subscriptions (e.g., on disconnect)
+   */
+  clearSubscriptions(): void {
+    for (const subscription of this.subscriptions.values()) {
+      if (subscription.intervalId) {
+        clearInterval(subscription.intervalId);
+      }
+    }
+    this.subscriptions.clear();
+  }
+
+  /**
+   * Get count of active subscriptions
+   */
+  getSubscriptionCount(): number {
+    return this.subscriptions.size;
   }
 }

@@ -1,5 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
-import type { ProviderRequest, ProviderResponse } from './types.js';
+import type { ProviderRequest, ProviderResponse, UIRequest, UIResponse, WalletUIState, UINotification } from './types.js';
+import { isUIRequest } from './types.js';
 import type { RequestQueue } from './queue.js';
 
 /**
@@ -22,6 +23,11 @@ export class WebSocketBridge {
   start(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.wss = new WebSocketServer({ port: this.port });
+
+      // Set up subscription callback to broadcast notifications
+      this.queue.setSubscriptionCallback((subscriptionId, result) => {
+        this.broadcastSubscription(subscriptionId, result);
+      });
 
       this.wss.on('listening', () => {
         console.log(`WebSocket bridge listening on ws://localhost:${this.port}`);
@@ -78,8 +84,16 @@ export class WebSocketBridge {
 
     ws.on('message', async (data) => {
       try {
-        const message = JSON.parse(data.toString()) as ProviderRequest;
-        await this.handleRequest(ws, message);
+        const message = JSON.parse(data.toString());
+
+        // Check if this is a UI request
+        if (isUIRequest(message)) {
+          await this.handleUIRequest(ws, message);
+          return;
+        }
+
+        // Otherwise handle as provider request
+        await this.handleRequest(ws, message as ProviderRequest);
       } catch (error) {
         console.error('Error handling message:', error);
         const errorResponse: ProviderResponse = {
@@ -132,6 +146,18 @@ export class WebSocketBridge {
       } else {
         // Queue the request and wait for approval
         console.log(`Queueing request: ${method}`);
+
+        // Send notification to UI that a new request needs approval
+        const notification: UINotification = {
+          type: 'ui_notification',
+          event: 'newPendingRequest',
+          data: {
+            method,
+            pendingCount: this.queue.getPendingCount() + 1, // +1 since we're about to add it
+          },
+        };
+        this.broadcast(notification);
+
         result = await this.queue.addRequest(method, params);
       }
 
@@ -155,14 +181,144 @@ export class WebSocketBridge {
   }
 
   /**
+   * Handle a UI request from the Developer Wallet UI
+   */
+  private async handleUIRequest(ws: WebSocket, request: UIRequest): Promise<void> {
+    const { id, action, params } = request;
+
+    try {
+      if (action === 'getState') {
+        const wallet = this.queue.getWallet();
+        const address = wallet.getAddress();
+
+        // Gather wallet state
+        const [balance, blockNumber, gasPrice, nonce] = await Promise.all([
+          wallet.getBalance(address),
+          wallet.getBlockNumber(),
+          wallet.getGasPrice(),
+          wallet.getTransactionCount(address),
+        ]);
+
+        const state: WalletUIState = {
+          address,
+          accountIndex: wallet.getAccountIndex(),
+          balance,
+          nonce,
+          chainId: wallet.getChainId(),
+          blockNumber: Number(blockNumber),
+          gasPrice: gasPrice.toString(),
+          pendingCount: this.queue.getPendingCount(),
+          connected: true,
+        };
+
+        const response: UIResponse = {
+          type: 'ui_response',
+          id,
+          result: state,
+        };
+        ws.send(JSON.stringify(response));
+      } else if (action === 'approveRequest') {
+        if (!params?.requestId) {
+          throw new Error('requestId is required for approveRequest');
+        }
+        const result = await this.queue.approveRequest(params.requestId);
+        const response: UIResponse = {
+          type: 'ui_response',
+          id,
+          result: { success: true, result },
+        };
+        ws.send(JSON.stringify(response));
+
+        // Notify all clients that a request was resolved
+        const notification: UINotification = {
+          type: 'ui_notification',
+          event: 'requestResolved',
+          data: {
+            requestId: params.requestId,
+            pendingCount: this.queue.getPendingCount(),
+          },
+        };
+        this.broadcast(notification);
+      } else if (action === 'rejectRequest') {
+        if (!params?.requestId) {
+          throw new Error('requestId is required for rejectRequest');
+        }
+        this.queue.rejectRequest(params.requestId, params.reason);
+        const response: UIResponse = {
+          type: 'ui_response',
+          id,
+          result: { success: true },
+        };
+        ws.send(JSON.stringify(response));
+
+        // Notify all clients that a request was resolved
+        const notification: UINotification = {
+          type: 'ui_notification',
+          event: 'requestResolved',
+          data: {
+            requestId: params.requestId,
+            pendingCount: this.queue.getPendingCount(),
+          },
+        };
+        this.broadcast(notification);
+      } else if (action === 'switchAccount') {
+        if (params?.accountIndex === undefined) {
+          throw new Error('accountIndex is required for switchAccount');
+        }
+        const wallet = this.queue.getWallet();
+        wallet.switchAccount(params.accountIndex);
+        const address = wallet.getAddress();
+        const response: UIResponse = {
+          type: 'ui_response',
+          id,
+          result: { success: true, address },
+        };
+        ws.send(JSON.stringify(response));
+      } else if (action === 'getPendingRequests') {
+        const requests = this.queue.getPendingRequests();
+        const response: UIResponse = {
+          type: 'ui_response',
+          id,
+          result: { requests },
+        };
+        ws.send(JSON.stringify(response));
+      } else {
+        throw new Error(`Unknown UI action: ${action}`);
+      }
+    } catch (error) {
+      const errorResponse: UIResponse = {
+        type: 'ui_response',
+        id,
+        error: {
+          code: -32603,
+          message: error instanceof Error ? error.message : 'Internal error',
+        },
+      };
+      ws.send(JSON.stringify(errorResponse));
+    }
+  }
+
+  /**
    * Broadcast a message to all connected clients
    */
-  broadcast(message: Record<string, unknown>): void {
+  broadcast(message: Record<string, unknown> | UINotification): void {
     const data = JSON.stringify(message);
     for (const client of this.clients) {
       if (client.readyState === WebSocket.OPEN) {
         client.send(data);
       }
     }
+  }
+
+  /**
+   * Broadcast a subscription notification to all connected clients
+   */
+  private broadcastSubscription(subscriptionId: string, result: unknown): void {
+    const notification = {
+      type: 'subscription',
+      subscriptionId,
+      result,
+    };
+    this.broadcast(notification);
   }
 }

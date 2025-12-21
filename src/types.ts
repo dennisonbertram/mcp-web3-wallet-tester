@@ -44,6 +44,72 @@ export interface ProviderResponse {
 }
 
 /**
+ * UI state exposed to the Developer Wallet UI
+ */
+export interface WalletUIState {
+  address: string;
+  accountIndex: number;
+  balance: string;
+  nonce: number;
+  chainId: number;
+  blockNumber: number;
+  gasPrice: string;
+  pendingCount: number;
+  connected: boolean;
+}
+
+/**
+ * UI request from browser to server (for Developer Wallet UI)
+ */
+export interface UIRequest {
+  type: 'ui_request';
+  id: string;
+  action: 'getState' | 'approveRequest' | 'rejectRequest' | 'switchAccount' | 'getPendingRequests';
+  params?: {
+    requestId?: string;
+    reason?: string;
+    accountIndex?: number;
+  };
+}
+
+/**
+ * UI response from server to browser
+ */
+export interface UIResponse {
+  type: 'ui_response';
+  id: string;
+  result?: WalletUIState | { success: boolean; result?: unknown; address?: string } | { requests: SerializedWalletRequest[] };
+  error?: {
+    code: number;
+    message: string;
+  };
+}
+
+/**
+ * UI notification sent from server to browser (push notifications)
+ */
+export interface UINotification {
+  type: 'ui_notification';
+  event: 'newPendingRequest' | 'requestResolved';
+  data?: {
+    requestId?: string;
+    method?: string;
+    pendingCount?: number;
+  };
+}
+
+/**
+ * Type guard for UI requests
+ */
+export function isUIRequest(message: unknown): message is UIRequest {
+  return (
+    typeof message === 'object' &&
+    message !== null &&
+    (message as UIRequest).type === 'ui_request'
+  );
+}
+
+/**
  * EIP-1193 error codes
  */
 export const EIP1193_ERRORS = {
@@ -53,6 +119,52 @@ export const EIP1193_ERRORS = {
   DISCONNECTED: { code: 4900, message: 'Disconnected' },
   CHAIN_DISCONNECTED: { code: 4901, message: 'Chain disconnected' },
 } as const;
+
+/**
+ * EIP-1193 ProviderRpcError class
+ * Errors returned by the provider should be instances of this class
+ */
+export class ProviderRpcError extends Error {
+  readonly code: number;
+  readonly data?: unknown;
+
+  constructor(code: number, message: string, data?: unknown) {
+    super(message);
+    this.name = 'ProviderRpcError';
+    this.code = code;
+    this.data = data;
+    // Maintains proper stack trace for where our error was thrown (only available on V8)
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, ProviderRpcError);
+    }
+  }
+}
+
+/**
+ * EIP-1193 ProviderMessage interface for the 'message' event
+ */
+export interface ProviderMessage {
+  readonly type: string;
+  readonly data: unknown;
+}
+
+/**
+ * EIP-1193 EthSubscription message for subscription results
+ */
+export interface EthSubscription extends ProviderMessage {
+  readonly type: 'eth_subscription';
+  readonly data: {
+    readonly subscription: string;
+    readonly result: unknown;
+  };
+}
+
+/**
+ * EIP-1193 ProviderConnectInfo for the 'connect' event
+ */
+export interface ProviderConnectInfo {
+  readonly chainId: string;
+}
 
 /**
  * Transaction parameters as received from dApp

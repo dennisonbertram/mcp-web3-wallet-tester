@@ -4,15 +4,22 @@
   "description": "MCP server that acts as an Ethereum wallet for LLM-controlled Web3 dApp testing",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "web3-wallet-tester": "./dist/cli.js",
+    "mcp-wallet": "./dist/cli.js"
+  },
   "scripts": {
     "build": "tsc && npm run build:provider",
     "build:provider": "node esbuild.config.js",
+    "build:provider:dev": "DEV_MODE=true node esbuild.config.js",
     "start": "node dist/index.js",
+    "cli": "node dist/cli.js",
     "dev": "tsc --watch",
     "test": "vitest",
     "test:run": "vitest run",
     "lint": "eslint src --ext .ts",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "serve:test-dapp": "node examples/serve.js"
   },
   "keywords": [
     "mcp",
@@ -32,10 +39,16 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.2",
     "@types/express": "^4.17.21",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.12",
+    "@typescript-eslint/eslint-plugin": "^8.50.0",
+    "@typescript-eslint/parser": "^8.50.0",
     "esbuild": "^0.24.0",
+    "eslint": "^9.39.2",
+    "globals": "^16.5.0",
+    "happy-dom": "^20.0.11",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   }

@@ -4,8 +4,37 @@ import { RequestQueue } from './queue.js';
 import { WebSocketBridge } from './ws-bridge.js';
 import { createMcpServer, createExpressApp } from './mcp-server.js';
 
+/**
+ * Fetch the actual chain ID from Anvil
+ */
+async function getAnvilChainId(rpcUrl: string): Promise<number | null> {
+  try {
+    const response = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_chainId', id: 1 }),
+    });
+    const data = await response.json() as { result?: string };
+    if (data.result) {
+      return parseInt(data.result, 16);
+    }
+  } catch {
+    // Anvil not running or unreachable
+  }
+  return null;
+}
+
 async function main() {
   const config = getConfig();
+
+  // Auto-detect chain ID from Anvil if not explicitly set via env
+  if (!process.env.CHAIN_ID) {
+    const detectedChainId = await getAnvilChainId(config.anvilRpcUrl);
+    if (detectedChainId !== null && detectedChainId !== config.chainId) {
+      console.log(`Auto-detected Anvil chain ID: ${detectedChainId} (overriding default ${config.chainId})`);
+      config.chainId = detectedChainId;
+    }
+  }
 
   console.log('Starting MCP Web3 Wallet Tester...');
   console.log(`Configuration:`);
