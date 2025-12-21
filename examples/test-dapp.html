@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dev Wallet Test dApp</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #fff;
+      min-height: 100vh;
+      margin: 0;
+      padding: 40px;
+    }
+
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      color: #888;
+      margin-bottom: 2rem;
+    }
+
+    .status-bar {
+      background: #2d2d44;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 2rem;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .status-indicator {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #ef4444;
+    }
+
+    .status-indicator.connected {
+      background: #22c55e;
+    }
+
+    .status-text {
+      flex: 1;
+    }
+
+    .address {
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 0.9rem;
+      color: #8b5cf6;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 2rem;
+    }
+
+    button {
+      background: #8b5cf6;
+      color: white;
+      border: none;
+      padding: 16px 24px;
+      border-radius: 8px;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    button:hover {
+      background: #7c3aed;
+      transform: translateY(-2px);
+    }
+
+    button:active {
+      transform: translateY(0);
+    }
+
+    button:disabled {
+      background: #4a4a6a;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .log-section {
+      background: #0d0d1a;
+      border-radius: 12px;
+      padding: 20px;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+
+    .log-section h3 {
+      margin-top: 0;
+      color: #888;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .log-entry {
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 0.85rem;
+      padding: 8px 12px;
+      margin: 4px 0;
+      border-radius: 4px;
+      background: #1a1a2e;
+    }
+
+    .log-entry.success {
+      border-left: 3px solid #22c55e;
+    }
+
+    .log-entry.error {
+      border-left: 3px solid #ef4444;
+    }
+
+    .log-entry.info {
+      border-left: 3px solid #3b82f6;
+    }
+
+    .log-entry.pending {
+      border-left: 3px solid #f59e0b;
+    }
+
+    .log-time {
+      color: #666;
+      margin-right: 8px;
+    }
+
+    .instructions {
+      background: #2d2d44;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 2rem;
+    }
+
+    .instructions h3 {
+      margin-top: 0;
+    }
+
+    .instructions ol {
+      margin: 0;
+      padding-left: 1.5rem;
+    }
+
+    .instructions li {
+      margin: 8px 0;
+      color: #ccc;
+    }
+
+    .instructions code {
+      background: #1a1a2e;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.9rem;
+    }
+
+    .contract-section {
+      background: #2d2d44;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 2rem;
+    }
+
+    .contract-section h3 {
+      margin-top: 0;
+      margin-bottom: 0.5rem;
+    }
+
+    .contract-subtitle {
+      color: #888;
+      margin-top: 0;
+      margin-bottom: 1rem;
+      font-size: 0.9rem;
+    }
+
+    .contract-info {
+      background: #1a1a2e;
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 0.9rem;
+    }
+
+    .contract-label {
+      color: #888;
+    }
+
+    #counterValue {
+      color: #22c55e;
+      font-weight: bold;
+      font-size: 1.1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Dev Wallet Test dApp</h1>
+    <p class="subtitle">Test the Developer Wallet UI with various Web3 actions</p>
+
+    <div class="instructions">
+      <h3>Setup Instructions</h3>
+      <ol>
+        <li>Start Anvil: <code>anvil</code></li>
+        <li>Build dev provider: <code>npm run build:provider:dev</code></li>
+        <li>Start wallet server: <code>npm start</code></li>
+        <li>Open this file in a browser</li>
+        <li>Click the floating wallet button (bottom-right) to open the Dev Wallet UI</li>
+      </ol>
+    </div>
+
+    <div class="status-bar">
+      <div class="status-indicator" id="statusIndicator"></div>
+      <div class="status-text">
+        <div id="statusText">Not connected</div>
+        <div class="address" id="addressText"></div>
+      </div>
+      <button id="connectBtn">Connect Wallet</button>
+    </div>
+
+    <div class="actions">
+      <button id="sendTxBtn" disabled>Send 0.01 ETH</button>
+      <button id="signMsgBtn" disabled>Sign Message</button>
+      <button id="signTypedBtn" disabled>Sign Typed Data</button>
+      <button id="getBalanceBtn" disabled>Get Balance</button>
+    </div>
+
+    <div class="contract-section">
+      <h3>Contract Demo</h3>
+      <p class="contract-subtitle">Deploy and interact with a simple Counter contract</p>
+      <div class="contract-info" id="contractInfo" style="display: none;">
+        <span class="contract-label">Contract:</span>
+        <span class="address" id="contractAddress"></span>
+        <span class="contract-label" style="margin-left: 20px;">Count:</span>
+        <span id="counterValue">0</span>
+      </div>
+      <div class="actions">
+        <button id="deployBtn" disabled>Deploy Counter</button>
+        <button id="incrementBtn" disabled>Increment (+1)</button>
+        <button id="getCountBtn" disabled>Get Count</button>
+      </div>
+    </div>
+
+    <div class="log-section">
+      <h3>Activity Log</h3>
+      <div id="logContainer"></div>
+    </div>
+  </div>
+
+  <!-- Load the dev provider bundle -->
+  <script src="../dist/provider.js"></script>
+
+  <script>
+    // DOM Elements
+    const statusIndicator = document.getElementById('statusIndicator');
+    const statusText = document.getElementById('statusText');
+    const addressText = document.getElementById('addressText');
+    const connectBtn = document.getElementById('connectBtn');
+    const sendTxBtn = document.getElementById('sendTxBtn');
+    const signMsgBtn = document.getElementById('signMsgBtn');
+    const signTypedBtn = document.getElementById('signTypedBtn');
+    const getBalanceBtn = document.getElementById('getBalanceBtn');
+    const logContainer = document.getElementById('logContainer');
+
+    // Contract DOM Elements
+    const deployBtn = document.getElementById('deployBtn');
+    const incrementBtn = document.getElementById('incrementBtn');
+    const getCountBtn = document.getElementById('getCountBtn');
+    const contractInfo = document.getElementById('contractInfo');
+    const contractAddressEl = document.getElementById('contractAddress');
+    const counterValueEl = document.getElementById('counterValue');
+
+    // Simple Counter contract
+    // Solidity source:
+    // contract Counter {
+    //   uint256 public count;
+    //   function increment() public { count += 1; }
+    // }
+    const COUNTER_BYTECODE = '0x6080604052348015600e575f80fd5b506101438061001c5f395ff3fe608060405234801561000f575f80fd5b5060043610610034575f3560e01c806306661abd14610038578063d09de08a14610056575b5f80fd5b610040610060565b60405161004d9190610090565b60405180910390f35b61005e610065565b005b5f5481565b60015f8082825461007691906100d6565b92505081905550565b5f819050919050565b61008a8161007f565b82525050565b5f6020820190506100a35f830184610081565b92915050565b7f4e487b71000000000000000000000000000000000000000000000000000000005f52601160045260245ffd5b5f6100e08261007f565b91506100eb8361007f565b9250828201905080821115610103576101026100a9565b5b9291505056fea2646970667358221220b3a2e8a84f1d5ca5d9c1e5f8f7e7d9a4c5b3a2e1f8d7c6b5a4e3f2e1d0c9b8a770736f6c634300081c0033';
+
+    // Function selectors
+    const INCREMENT_SELECTOR = '0xd09de08a'; // increment()
+    const COUNT_SELECTOR = '0x06661abd';     // count()
+
+    // State
+    let connectedAddress = null;
+    let deployedContractAddress = null;
+
+    // Logging helper
+    function log(message, type = 'info') {
+      const time = new Date().toLocaleTimeString();
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${type}`;
+      entry.innerHTML = `<span class="log-time">${time}</span>${message}`;
+      logContainer.insertBefore(entry, logContainer.firstChild);
+    }
+
+    // Check if ethereum provider exists
+    function checkProvider() {
+      if (typeof window.ethereum === 'undefined') {
+        log('No ethereum provider found. Make sure the wallet server is running.', 'error');
+        return false;
+      }
+      return true;
+    }
+
+    // Update connection status
+    function updateStatus(connected, address = null) {
+      connectedAddress = address;
+      statusIndicator.classList.toggle('connected', connected);
+      statusText.textContent = connected ? 'Connected' : 'Not connected';
+      addressText.textContent = address || '';
+      connectBtn.textContent = connected ? 'Connected' : 'Connect Wallet';
+      connectBtn.disabled = connected;
+
+      // Enable/disable action buttons
+      sendTxBtn.disabled = !connected;
+      signMsgBtn.disabled = !connected;
+      signTypedBtn.disabled = !connected;
+      getBalanceBtn.disabled = !connected;
+
+      // Contract buttons
+      deployBtn.disabled = !connected;
+      incrementBtn.disabled = !connected || !deployedContractAddress;
+      getCountBtn.disabled = !connected || !deployedContractAddress;
+    }
+
+    // Update contract UI after deployment
+    function updateContractUI(address, count = 0) {
+      deployedContractAddress = address;
+      if (address) {
+        contractInfo.style.display = 'block';
+        contractAddressEl.textContent = address.slice(0, 10) + '...' + address.slice(-8);
+        counterValueEl.textContent = count;
+        incrementBtn.disabled = false;
+        getCountBtn.disabled = false;
+      } else {
+        contractInfo.style.display = 'none';
+        incrementBtn.disabled = true;
+        getCountBtn.disabled = true;
+      }
+    }
+
+    // Connect wallet
+    connectBtn.addEventListener('click', async () => {
+      if (!checkProvider()) return;
+
+      log('Requesting wallet connection...', 'pending');
+      try {
+        const accounts = await window.ethereum.request({
+          method: 'eth_requestAccounts'
+        });
+
+        if (accounts && accounts.length > 0) {
+          updateStatus(true, accounts[0]);
+          log(`Connected: ${accounts[0]}`, 'success');
+        }
+      } catch (error) {
+        log(`Connection failed: ${error.message}`, 'error');
+      }
+    });
+
+    // Send transaction
+    sendTxBtn.addEventListener('click', async () => {
+      if (!connectedAddress) return;
+
+      log('Sending 0.01 ETH transaction...', 'pending');
+      try {
+        // Send to a random address (second Anvil account)
+        const txHash = await window.ethereum.request({
+          method: 'eth_sendTransaction',
+          params: [{
+            from: connectedAddress,
+            to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+            value: '0x2386F26FC10000', // 0.01 ETH in hex wei
+            data: '0x',
+          }],
+        });
+
+        log(`Transaction sent: ${txHash}`, 'success');
+      } catch (error) {
+        log(`Transaction failed: ${error.message}`, 'error');
+      }
+    });
+
+    // Sign message
+    signMsgBtn.addEventListener('click', async () => {
+      if (!connectedAddress) return;
+
+      const message = 'Hello from Dev Wallet Test dApp!\n\nTimestamp: ' + new Date().toISOString();
+      log('Requesting personal_sign...', 'pending');
+
+      try {
+        // Convert message to hex
+        const hexMessage = '0x' + Array.from(new TextEncoder().encode(message))
+          .map(b => b.toString(16).padStart(2, '0'))
+          .join('');
+
+        const signature = await window.ethereum.request({
+          method: 'personal_sign',
+          params: [hexMessage, connectedAddress],
+        });
+
+        log(`Signature: ${signature.slice(0, 20)}...`, 'success');
+      } catch (error) {
+        log(`Sign failed: ${error.message}`, 'error');
+      }
+    });
+
+    // Sign typed data (EIP-712)
+    signTypedBtn.addEventListener('click', async () => {
+      if (!connectedAddress) return;
+
+      log('Requesting eth_signTypedData_v4...', 'pending');
+
+      const typedData = {
+        types: {
+          EIP712Domain: [
+            { name: 'name', type: 'string' },
+            { name: 'version', type: 'string' },
+            { name: 'chainId', type: 'uint256' },
+          ],
+          Message: [
+            { name: 'content', type: 'string' },
+            { name: 'timestamp', type: 'uint256' },
+          ],
+        },
+        primaryType: 'Message',
+        domain: {
+          name: 'Dev Wallet Test',
+          version: '1',
+          chainId: 31337,
+        },
+        message: {
+          content: 'Test typed data signing',
+          timestamp: Math.floor(Date.now() / 1000),
+        },
+      };
+
+      try {
+        const signature = await window.ethereum.request({
+          method: 'eth_signTypedData_v4',
+          params: [connectedAddress, JSON.stringify(typedData)],
+        });
+
+        log(`Typed signature: ${signature.slice(0, 20)}...`, 'success');
+      } catch (error) {
+        log(`Sign failed: ${error.message}`, 'error');
+      }
+    });
+
+    // Get balance
+    getBalanceBtn.addEventListener('click', async () => {
+      if (!connectedAddress) return;
+
+      log('Fetching balance...', 'pending');
+
+      try {
+        const balance = await window.ethereum.request({
+          method: 'eth_getBalance',
+          params: [connectedAddress, 'latest'],
+        });
+
+        // Convert hex wei to ETH
+        const ethBalance = parseInt(balance, 16) / 1e18;
+        log(`Balance: ${ethBalance.toFixed(4)} ETH`, 'success');
+      } catch (error) {
+        log(`Balance fetch failed: ${error.message}`, 'error');
+      }
+    });
+
+    // Deploy Counter contract
+    deployBtn.addEventListener('click', async () => {
+      if (!connectedAddress) return;
+
+      log('Deploying Counter contract...', 'pending');
+      try {
+        // Contract creation: send transaction with no 'to' address
+        const txHash = await window.ethereum.request({
+          method: 'eth_sendTransaction',
+          params: [{
+            from: connectedAddress,
+            data: COUNTER_BYTECODE,
+            gas: '0x100000', // 1M gas limit for deployment
+          }],
+        });
+
+        log(`Deploy tx sent: ${txHash.slice(0, 18)}...`, 'info');
+        log('Waiting for confirmation...', 'pending');
+
+        // Poll for receipt to get contract address
+        let receipt = null;
+        let attempts = 0;
+        while (!receipt && attempts < 30) {
+          await new Promise(r => setTimeout(r, 1000));
+          receipt = await window.ethereum.request({
+            method: 'eth_getTransactionReceipt',
+            params: [txHash],
+          });
+          attempts++;
+        }
+
+        if (receipt && receipt.contractAddress) {
+          log(`Contract deployed at: ${receipt.contractAddress}`, 'success');
+          updateContractUI(receipt.contractAddress, 0);
+        } else {
+          log('Failed to get contract address from receipt', 'error');
+        }
+      } catch (error) {
+        log(`Deploy failed: ${error.message}`, 'error');
+      }
+    });
+
+    // Increment counter
+    incrementBtn.addEventListener('click', async () => {
+      if (!connectedAddress || !deployedContractAddress) return;
+
+      log('Calling increment()...', 'pending');
+      try {
+        const txHash = await window.ethereum.request({
+          method: 'eth_sendTransaction',
+          params: [{
+            from: connectedAddress,
+            to: deployedContractAddress,
+            data: INCREMENT_SELECTOR,
+            gas: '0x30000', // 200k gas
+          }],
+        });
+
+        log(`Increment tx: ${txHash.slice(0, 18)}...`, 'info');
+
+        // Wait for confirmation then get new count
+        let receipt = null;
+        let attempts = 0;
+        while (!receipt && attempts < 30) {
+          await new Promise(r => setTimeout(r, 1000));
+          receipt = await window.ethereum.request({
+            method: 'eth_getTransactionReceipt',
+            params: [txHash],
+          });
+          attempts++;
+        }
+
+        if (receipt) {
+          log('Increment confirmed!', 'success');
+          // Fetch updated count
+          getCountBtn.click();
+        }
+      } catch (error) {
+        log(`Increment failed: ${error.message}`, 'error');
+      }
+    });
+
+    // Get count (read-only call)
+    getCountBtn.addEventListener('click', async () => {
+      if (!deployedContractAddress) return;
+
+      log('Reading count()...', 'pending');
+      try {
+        const result = await window.ethereum.request({
+          method: 'eth_call',
+          params: [{
+            to: deployedContractAddress,
+            data: COUNT_SELECTOR,
+          }, 'latest'],
+        });
+
+        // Parse uint256 result
+        const count = parseInt(result, 16);
+        counterValueEl.textContent = count;
+        log(`Count: ${count}`, 'success');
+      } catch (error) {
+        log(`Get count failed: ${error.message}`, 'error');
+      }
+    });
+
+    // EIP-6963 Provider Discovery
+    const discoveredProviders = new Map();
+
+    function handleEIP6963Announcement(event) {
+      const { info, provider } = event.detail;
+      if (!info || !provider) return;
+
+      discoveredProviders.set(info.uuid, { info, provider });
+      log(`EIP-6963: Discovered wallet "${info.name}" (${info.rdns})`, 'success');
+
+      // If this is our test wallet, use it
+      if (info.rdns === 'com.test.web3wallet') {
+        log('Found our test wallet via EIP-6963!', 'success');
+        // Use this provider for subsequent operations
+        window.ethereum = provider;
+        setupProviderListeners(provider);
+      }
+    }
+
+    function setupProviderListeners(provider) {
+      provider.on('accountsChanged', (accounts) => {
+        if (accounts.length === 0) {
+          updateStatus(false);
+          log('Wallet disconnected', 'info');
+        } else {
+          updateStatus(true, accounts[0]);
+          log(`Account changed: ${accounts[0]}`, 'info');
+        }
+      });
+
+      provider.on('chainChanged', (chainId) => {
+        log(`Chain changed: ${chainId}`, 'info');
+      });
+    }
+
+    // Listen for EIP-6963 announcements
+    window.addEventListener('eip6963:announceProvider', handleEIP6963Announcement);
+
+    // Request providers (EIP-6963)
+    window.dispatchEvent(new Event('eip6963:requestProvider'));
+    log('Sent EIP-6963 request for providers...', 'info');
+
+    // Also listen for account changes on existing provider
+    if (window.ethereum) {
+      setupProviderListeners(window.ethereum);
+      log('Ethereum provider detected on window.ethereum', 'success');
+    } else {
+      log('No window.ethereum, waiting for EIP-6963...', 'pending');
+      // Check again after a short delay
+      setTimeout(() => {
+        if (window.ethereum) {
+          setupProviderListeners(window.ethereum);
+          log('Ethereum provider detected', 'success');
+        } else if (discoveredProviders.size === 0) {
+          log('No provider found. Is the wallet server running?', 'error');
+        }
+      }, 2000);
+    }
+  </script>
+</body>
+</html>

@@ -291,7 +291,194 @@ export function createMcpServer(wallet: Wallet, queue: RequestQueue): McpServer 
     }
   );
 
+  // Tool: Get provider injection script
+  server.registerTool(
+    'wallet_getProviderScript',
+    {
+      description: 'Get the provider injection script for use with Playwright addInitScript. Returns JavaScript code that should be injected before page load to enable wallet functionality.',
+      inputSchema: {
+        wsUrl: z.string().optional().describe('WebSocket URL (default: ws://localhost:8546)'),
+      },
+    },
+    async ({ wsUrl }) => {
+      try {
+        const providerPath = join(__dirname, '..', 'dist', 'provider.js');
+        let script = readFileSync(providerPath, 'utf-8');
+
+        // If a custom WebSocket URL is provided, inject it before the script
+        if (wsUrl) {
+          script = `window.__WEB3_TEST_WALLET_WS_URL__ = "${wsUrl}";\n${script}`;
+        }
+
+        return {
+          content: [{ type: 'text', text: script }],
+        };
+      } catch {
+        return {
+          content: [{ type: 'text', text: `Error: Provider script not found. Run npm run build:provider first.` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
   // Register documentation resources
+
+  // Resource: Quick Start - Bundled guide that doesn't depend on external files
+  // This is the PRIMARY resource LLMs should read to understand how to use the wallet
+  server.registerResource(
+    'quick-start',
+    'wallet://docs/quick-start',
+    {
+      title: 'Quick Start Guide',
+      description: 'Essential guide for using the MCP Web3 Wallet Tester - READ THIS FIRST',
+      mimeType: 'text/markdown',
+    },
+    async (uri) => {
+      // This content is bundled directly into the code so it's always available
+      const quickStart = `# MCP Web3 Wallet Tester - Quick Start
+
+## What This Does
+
+This MCP server lets you control an Ethereum wallet programmatically for testing Web3 dApps.
+When a dApp requests a transaction, you approve/reject it via MCP tools.
+
+## Prerequisites
+
+1. **Anvil must be running**: \`anvil\`
+2. **Wallet server must be running**: \`npm start\` or \`web3-wallet-tester\`
+
+## Essential Workflow
+
+### Step 1: Inject the Provider (Playwright)
+
+\`\`\`javascript
+// Fetch provider from wallet server
+const providerScript = await fetch('http://localhost:3000/provider.js').then(r => r.text());
+
+// CRITICAL: Inject BEFORE navigating to the dApp
+await page.addInitScript(providerScript);
+
+// Now navigate
+await page.goto('https://app.uniswap.org');
+\`\`\`
+
+### Step 2: Trigger an Action
+
+Click a button in the dApp (e.g., "Connect Wallet", "Swap", "Send").
+
+\`\`\`javascript
+await page.click('button:has-text("Connect Wallet")');
+await new Promise(r => setTimeout(r, 500)); // Wait for requests to queue
+\`\`\`
+
+### Step 3: Approve Requests
+
+\`\`\`javascript
+// Get pending requests
+const pending = await wallet_getPendingRequests();
+
+// Approve each one
+for (const req of pending) {
+  await wallet_approveRequest({ requestId: req.id });
+  await new Promise(r => setTimeout(r, 100));
+}
+\`\`\`
+
+### Step 4: Check for More Requests
+
+Many operations trigger multiple requests. Always check again:
+
+\`\`\`javascript
+await new Promise(r => setTimeout(r, 500));
+const more = await wallet_getPendingRequests();
+// Approve if needed...
+\`\`\`
+
+## Key MCP Tools
+
+| Tool | When to Use |
+|------|-------------|
+| \`wallet_getStatus\` | Check if server is running, see current state |
+| \`wallet_getPendingRequests\` | See what needs approval |
+| \`wallet_approveRequest\` | Approve a transaction/signature |
+| \`wallet_rejectRequest\` | Deny a request |
+| \`wallet_waitForRequest\` | Block until a request arrives |
+| \`wallet_setAutoApprove\` | Auto-approve all requests (for automated tests) |
+| \`wallet_getTransactionReceipt\` | Verify a transaction succeeded |
+| \`wallet_getProviderScript\` | Get the provider.js content directly |
+
+## Auto-Approve Mode
+
+For fully automated testing where you trust all requests:
+
+\`\`\`javascript
+await wallet_setAutoApprove({ enabled: true });
+// Now all requests are automatically approved
+\`\`\`
+
+## Common Pitfalls
+
+1. **Inject provider BEFORE page load** - Not after!
+2. **Wait for requests to queue** - Add 500ms delay after clicking
+3. **Check for additional requests** - Most operations trigger 2-3 requests
+4. **Some methods may fail** - \`wallet_requestPermissions\` often fails, that's OK
+
+## Verifying Server Status
+
+\`\`\`javascript
+const status = await wallet_getStatus();
+// Returns: { address, chainId, balance, pendingRequests, autoApprove }
+\`\`\`
+
+## Example: Complete Connection + Transaction
+
+\`\`\`javascript
+// 1. Setup
+const script = await fetch('http://localhost:3000/provider.js').then(r => r.text());
+await page.addInitScript(script);
+await page.goto('https://example-dapp.com');
+
+// 2. Connect
+await page.click('button:has-text("Connect")');
+await new Promise(r => setTimeout(r, 500));
+
+// 3. Approve connection
+let pending = await wallet_getPendingRequests();
+for (const req of pending) {
+  await wallet_approveRequest({ requestId: req.id });
+}
+
+// 4. Check for more
+await new Promise(r => setTimeout(r, 500));
+pending = await wallet_getPendingRequests();
+for (const req of pending) {
+  await wallet_approveRequest({ requestId: req.id });
+}
+
+// 5. Verify connected
+const status = await wallet_getStatus();
+console.log('Connected as:', status.address);
+\`\`\`
+
+## Need More Help?
+
+- Read \`wallet://docs/instructions\` for detailed workflow
+- Read \`wallet://docs/tools\` for complete tool reference
+- Read \`wallet://docs/testing-guide\` for troubleshooting
+`;
+
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            text: quickStart,
+            mimeType: 'text/markdown',
+          },
+        ],
+      };
+    }
+  );
 
   // Resource: LLM Instructions - Concise usage guide for AI agents
   server.registerResource(
@@ -496,6 +683,19 @@ export function createExpressApp(server: McpServer): Express {
   // Health check endpoint
   app.get('/health', (_req: Request, res: Response) => {
     res.json({ status: 'ok' });
+  });
+
+  // Serve provider.js for injection
+  app.get('/provider.js', (_req: Request, res: Response) => {
+    try {
+      const providerPath = join(__dirname, '..', 'dist', 'provider.js');
+      const providerScript = readFileSync(providerPath, 'utf-8');
+      res.setHeader('Content-Type', 'application/javascript');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.send(providerScript);
+    } catch {
+      res.status(500).json({ error: 'Provider script not found. Run npm run build:provider first.' });
+    }
   });
 
   return app;

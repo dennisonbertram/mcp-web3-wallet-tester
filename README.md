@@ -1,262 +1,198 @@
 # MCP Web3 Wallet Tester
 
-An MCP server that acts as an Ethereum wallet, allowing LLMs to control Web3 dApp testing via Playwright. When a dApp requests a transaction, the LLM can approve/reject it through MCP tools.
+An MCP server that acts as a programmable Ethereum wallet for automated Web3 dApp testing. LLMs can control wallet operations (approve transactions, sign messages, manage accounts) via MCP tools while Playwright automates the browser.
 
-## Prerequisites
+## Features
 
-Before using this MCP server, ensure you have:
-
-- **Node.js 18+** - Required for running the server
-- **Anvil** (from Foundry) - Required for local Ethereum testing
-  - Install via: `curl -L https://foundry.paradigm.xyz | bash && foundryup`
-  - Verify with: `anvil --version`
-
-**IMPORTANT**: The wallet server must be running BEFORE Claude Code can use the wallet tools. The server persists across LLM calls to maintain state.
+- **Full EIP-1193 Provider** - Injects a complete Ethereum provider into any dApp
+- **EIP-6963 Support** - Modern wallet discovery for multi-wallet environments
+- **MCP Integration** - Control wallet via MCP tools from any LLM
+- **Multi-Account** - Switch between 10 Anvil test accounts or use custom keys
+- **Auto-Approve Mode** - Enable fully automated testing when needed
+- **Provider Serving** - Fetch provider script via HTTP for easy injection
 
 ## Quick Start
 
-Follow these steps to get up and running:
+### Prerequisites
 
-### 1. Install Dependencies
+- **Node.js 18+**
+- **Anvil** (from Foundry): `curl -L https://foundry.paradigm.xyz | bash && foundryup`
+
+### Installation
 
 ```bash
 npm install
-```
-
-### 2. Build the Project
-
-```bash
 npm run build
 ```
 
-### 3. Start Anvil (Local Ethereum Node)
+### Start the Server
 
-In a separate terminal, start Anvil:
+The easiest way to start everything:
 
 ```bash
+# Terminal 1: Start Anvil (local blockchain)
 anvil
-```
 
-Leave this running. You should see:
-```
-Listening on 127.0.0.1:8545
-```
-
-### 4. Start the Wallet Server
-
-In another terminal, start the wallet server:
-
-```bash
+# Terminal 2: Start the wallet server
 npm start
 ```
 
-You should see:
-```
-MCP Server:        http://localhost:3001/mcp
-WebSocket Bridge:  ws://localhost:8546
-```
-
-**Keep this running** - the server must stay active for Claude Code to use the wallet tools.
-
-### 5. Add to Claude Code
-
-In a third terminal, register the server with Claude Code:
+Or use the CLI:
 
 ```bash
-claude mcp add --transport http wallet-tester http://localhost:3001/mcp
+npx web3-wallet-tester
 ```
 
-That's it! Claude Code can now use the wallet tools to interact with Web3 dApps in Playwright tests.
+### Register with Claude Code
+
+```bash
+claude mcp add --transport http wallet-tester http://localhost:3000/mcp
+```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Wallet Server Process                         │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │              HTTP/SSE MCP Server (:3001)                │    │
-│  │         (Long-lived, persists across LLM calls)         │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                            │                                     │
-│                    ┌───────┴───────┐                            │
-│                    │ Request Queue │                            │
-│                    │   (in-memory) │                            │
-│                    └───────┬───────┘                            │
-│                            │                                     │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │            WebSocket Bridge (:8546)                     │    │
-│  │      (Browser provider connects here)                   │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                            │                                     │
-│                    ┌───────┴───────┐                            │
-│                    │  Viem Wallet  │                            │
-│                    │  (signing)    │                            │
-│                    └───────┬───────┘                            │
-└────────────────────────────│────────────────────────────────────┘
-                             │
-                             ▼
-                    ┌─────────────────┐
-                    │     Anvil       │
-                    │   (:8545)       │
-                    └─────────────────┘
-```
-
-## Installation
-
-```bash
-npm install
-npm run build
+Browser (dApp)                     Wallet Server                    Blockchain
+     │                                  │                               │
+     │  window.ethereum.request()       │                               │
+     ├─────────────────────────────────►│                               │
+     │         WebSocket                │  wallet_approveRequest()      │
+     │                                  │◄──────────────────────────────┤ LLM
+     │                                  │         MCP Tools             │
+     │                                  │                               │
+     │                                  │  eth_sendTransaction          │
+     │                                  ├──────────────────────────────►│
+     │                                  │       JSON-RPC                │ Anvil
+     │          result                  │                               │
+     │◄─────────────────────────────────┤                               │
 ```
 
 ## Usage
 
-### 1. Start Anvil (local Ethereum node)
-
-```bash
-anvil
-```
-
-### 2. Start the wallet server
-
-```bash
-npm start
-```
-
-Output:
-```
-MCP Server:        http://localhost:3001/mcp
-WebSocket Bridge:  ws://localhost:8546
-```
-
-### 3. Add to Claude Code
-
-```bash
-claude mcp add --transport http wallet-tester http://localhost:3001/mcp
-```
-
-### 4. Use in Playwright tests
-
-Inject the provider before page loads:
+### 1. Inject the Provider (Playwright)
 
 ```typescript
-import { readFileSync } from 'fs';
+// Fetch provider from the wallet server
+const providerScript = await fetch('http://localhost:3000/provider.js').then(r => r.text());
 
-// Read the provider bundle
-const providerScript = readFileSync('node_modules/mcp-web3-wallet-tester/dist/provider.js', 'utf-8');
-
-// Inject before page loads
+// Inject BEFORE navigating (critical for proper detection)
 await page.addInitScript(providerScript);
 
 // Navigate to dApp
-await page.goto('https://example-dapp.com');
-
-// Click connect wallet - the injected provider handles window.ethereum
-await page.click('button:has-text("Connect Wallet")');
+await page.goto('https://app.uniswap.org');
 ```
 
-## MCP Resources
+### 2. Control via MCP Tools
 
-The server exposes documentation as MCP resources that LLMs can read to understand how to use the wallet tester:
+```javascript
+// Check wallet status
+const status = await wallet_getStatus();
 
-| Resource URI | Description |
-|--------------|-------------|
-| `wallet://docs/instructions` | Concise LLM usage guide with step-by-step workflow and common pitfalls |
-| `wallet://docs/testing-guide` | Complete testing documentation with examples and troubleshooting |
-| `wallet://docs/tools` | List of all available MCP tools with parameters and usage patterns |
+// Wait for a wallet request
+const request = await wallet_waitForRequest({ timeoutMs: 30000 });
 
-LLMs can access these resources to learn how to use the wallet tester effectively.
+// Approve the request
+await wallet_approveRequest({ requestId: request.id });
+
+// Or enable auto-approve for automated testing
+await wallet_setAutoApprove({ enabled: true });
+```
 
 ## MCP Tools
 
 | Tool | Description |
 |------|-------------|
-| `wallet_getAddress` | Get the wallet address |
+| `wallet_getStatus` | Get wallet status (address, chain, balance, pending count) |
+| `wallet_getAddress` | Get current wallet address |
 | `wallet_getBalance` | Get ETH balance |
-| `wallet_getPendingRequests` | List pending requests |
+| `wallet_getChainId` | Get chain ID |
+| `wallet_getPendingRequests` | List pending requests awaiting approval |
 | `wallet_approveRequest` | Approve a pending request |
 | `wallet_rejectRequest` | Reject a pending request |
 | `wallet_waitForRequest` | Wait for a request to arrive |
-| `wallet_setAutoApprove` | Enable/disable auto-approve |
-| `wallet_getTransactionReceipt` | Get transaction receipt |
-| `wallet_getChainId` | Get chain ID |
-| `wallet_getStatus` | Get full wallet status |
+| `wallet_setAutoApprove` | Enable/disable auto-approve mode |
+| `wallet_getTransactionReceipt` | Get transaction receipt by hash |
 | `wallet_listAccounts` | List all 10 Anvil test accounts |
 | `wallet_switchAccount` | Switch to Anvil account by index (0-9) |
-| `wallet_setPrivateKey` | Switch to a custom private key |
+| `wallet_setPrivateKey` | Use a custom private key |
+| `wallet_getProviderScript` | Get provider.js for injection |
 
-## Example LLM Workflow
+## MCP Resources
 
-```
-User: "Test the swap feature on Uniswap"
+The server exposes documentation as MCP resources:
 
-LLM: I'll navigate to Uniswap and test the swap feature.
-→ Uses Playwright to navigate to uniswap.org
-→ Clicks "Connect Wallet"
+| Resource URI | Description |
+|--------------|-------------|
+| `wallet://docs/instructions` | LLM usage guide with workflow and examples |
+| `wallet://docs/testing-guide` | Complete testing documentation |
+| `wallet://docs/tools` | Tool reference with parameters |
 
-LLM: wallet_waitForRequest()
-→ Returns: {id: "req_1", method: "eth_requestAccounts", params: []}
+LLMs can read these resources to learn how to use the wallet tester.
 
-LLM: wallet_approveRequest({requestId: "req_1"})
-→ Returns wallet address
-→ dApp shows "Connected"
+## HTTP Endpoints
 
-LLM: I'll now swap 1 ETH for USDC
-→ Fills in swap form, clicks "Swap"
-
-LLM: wallet_waitForRequest()
-→ Returns: {id: "req_2", method: "eth_sendTransaction", params: [{...}]}
-
-LLM: wallet_approveRequest({requestId: "req_2"})
-→ Transaction sent to Anvil
-→ dApp shows "Transaction submitted"
-```
-
-### Account Management
-
-The LLM can dynamically switch between accounts during testing:
-
-```
-LLM: wallet_listAccounts()
-→ Returns: [{index: 0, address: "0xf39..."}, {index: 1, address: "0x709..."}, ...]
-
-LLM: wallet_switchAccount({accountIndex: 1})
-→ Returns: {success: true, accountIndex: 1, address: "0x70997970...", balance: "10000 ETH"}
-
-LLM: wallet_setPrivateKey({privateKey: "0xabcd..."})
-→ Returns: {success: true, address: "0x123...", balance: "0 ETH"}
-```
-
-This allows testing multi-user scenarios (e.g., Alice sends to Bob) without restarting the server.
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Health check |
+| `GET /provider.js` | Get the injectable provider script |
+| `POST /mcp` | MCP server endpoint |
 
 ## Configuration
 
-Environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MCP_PORT` | 3001 | HTTP MCP server port |
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `MCP_PORT` | 3000 | HTTP server port |
 | `WS_PORT` | 8546 | WebSocket bridge port |
 | `ANVIL_RPC_URL` | http://127.0.0.1:8545 | Anvil RPC URL |
-| `ACCOUNT_INDEX` | 0 | Anvil account index (0-9) to use |
-| `PRIVATE_KEY` | (from ACCOUNT_INDEX) | Wallet private key (overrides ACCOUNT_INDEX if set) |
-| `CHAIN_ID` | 31337 | Chain ID to report |
+| `CHAIN_ID` | (auto-detected) | Chain ID to report |
+| `ACCOUNT_INDEX` | 0 | Anvil account index (0-9) |
+| `PRIVATE_KEY` | (from index) | Custom private key |
 
-### Using Multiple Accounts
+## Working with MetaMask
 
-The server supports all 10 of Anvil's default test accounts. Use the `ACCOUNT_INDEX` environment variable to select which account to use (0-9):
+When MetaMask is installed, it locks `window.ethereum`. The wallet tester handles this by:
 
-```bash
-# Use account 0 (default)
-npm start
+1. **EIP-6963 Announcements** - Modern dApps discover wallets via events
+2. **Repeated Announcements** - Announces multiple times to catch late discovery
+3. **Modal Detection** - Re-announces when wallet selection UI opens
 
-# Use account 1
-ACCOUNT_INDEX=1 npm start
+For reliable testing:
+- Use Playwright's `addInitScript` (injects before MetaMask)
+- Use incognito mode (extensions disabled)
+- Disable MetaMask temporarily in `chrome://extensions`
 
-# Use account 5
-ACCOUNT_INDEX=5 npm start
+## Example: Complete Test Flow
+
+```javascript
+// 1. Setup
+const providerScript = await fetch('http://localhost:3000/provider.js').then(r => r.text());
+await page.addInitScript(providerScript);
+await page.goto('https://example-dapp.com');
+
+// 2. Connect wallet
+await page.click('button:has-text("Connect Wallet")');
+await new Promise(r => setTimeout(r, 500)); // Wait for requests
+
+// 3. Approve connection
+const pending = await wallet_getPendingRequests();
+for (const req of pending) {
+  await wallet_approveRequest({ requestId: req.id });
+}
+
+// 4. Send transaction
+await page.fill('input[name="amount"]', '1.5');
+await page.click('button:has-text("Send")');
+await new Promise(r => setTimeout(r, 500));
+
+// 5. Approve transaction
+const txRequests = await wallet_getPendingRequests();
+const txReq = txRequests.find(r => r.method === 'eth_sendTransaction');
+const result = await wallet_approveRequest({ requestId: txReq.id });
+
+// 6. Verify
+const receipt = await wallet_getTransactionReceipt({ hash: result.result });
+console.log('Transaction confirmed:', receipt.status);
 ```
-
-Each account has 10000 ETH on a fresh Anvil instance. You can also provide a custom private key with `PRIVATE_KEY` to override the account selection.
 
 ## Development
 
@@ -264,25 +200,55 @@ Each account has 10000 ETH on a fresh Anvil instance. You can also provide a cus
 # Type check
 npm run type-check
 
-# Build
+# Build everything
 npm run build
+
+# Build provider only
+npm run build:provider
+
+# Build with dev UI enabled
+npm run build:provider:dev
 
 # Watch mode
 npm run dev
 ```
 
-## How It Works
+## Project Structure
 
-1. **Injectable Provider** (`dist/provider.js`): A script injected into the browser that implements the EIP-1193 provider interface on `window.ethereum`. When a dApp calls wallet methods, requests are sent to the WebSocket bridge.
+```
+├── src/
+│   ├── index.ts           # Entry point, starts all services
+│   ├── mcp-server.ts      # MCP server with tools and resources
+│   ├── ws-bridge.ts       # WebSocket bridge for browser
+│   ├── queue.ts           # Request queue management
+│   ├── wallet.ts          # Viem wallet wrapper
+│   ├── types.ts           # TypeScript types
+│   └── provider/
+│       ├── injected.ts    # Browser provider (EIP-1193)
+│       └── ui/            # Developer wallet UI (optional)
+├── dist/
+│   ├── index.js           # Compiled server
+│   └── provider.js        # Compiled browser provider
+├── docs/
+│   ├── LLM_INSTRUCTIONS.md
+│   ├── TESTING_GUIDE.md
+│   └── ...
+└── examples/
+    ├── test-dapp.html     # Test dApp for development
+    └── bookmarklet.html   # Manual injection bookmarklet
+```
 
-2. **WebSocket Bridge**: Receives requests from the browser provider, adds them to the queue, and waits for approval before responding.
+## Documentation
 
-3. **Request Queue**: Manages pending wallet requests. Each request is a Promise that resolves when the LLM approves it (or rejects when denied).
-
-4. **MCP Server**: Exposes tools that let the LLM see pending requests and approve/reject them. Uses HTTP transport for persistence across test sessions.
-
-5. **Viem Wallet**: Handles actual Ethereum operations (signing, sending transactions) against the Anvil local node.
+- [LLM Instructions](./docs/LLM_INSTRUCTIONS.md) - Step-by-step guide for AI agents
+- [Testing Guide](./docs/TESTING_GUIDE.md) - Complete testing procedures
+- [Provider Injection](./docs/guides/provider-injection-2025-12-21.md) - How to inject the provider
+- [Architecture](./docs/architecture/overview-2025-12-21.md) - System design
 
 ## License
 
 MIT
+
+## Author
+
+Dennison Bertram

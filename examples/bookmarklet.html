@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Web3 Test Wallet - Bookmarklet Installer</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #fff;
+      min-height: 100vh;
+      margin: 0;
+      padding: 40px;
+    }
+    .container {
+      max-width: 700px;
+      margin: 0 auto;
+    }
+    h1 { color: #8b5cf6; }
+    .bookmarklet-link {
+      display: inline-block;
+      background: #8b5cf6;
+      color: white;
+      padding: 16px 32px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-size: 1.2rem;
+      margin: 20px 0;
+      cursor: move;
+    }
+    .bookmarklet-link:hover { background: #7c3aed; }
+    .instructions {
+      background: #2d2d44;
+      padding: 20px;
+      border-radius: 12px;
+      margin: 20px 0;
+    }
+    .instructions li { margin: 10px 0; color: #ccc; }
+    code {
+      background: #1a1a2e;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .warning {
+      background: #7f1d1d;
+      padding: 16px;
+      border-radius: 8px;
+      margin: 20px 0;
+    }
+    .note {
+      background: #1e3a5f;
+      padding: 16px;
+      border-radius: 8px;
+      margin: 20px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔌 Web3 Test Wallet Bookmarklet</h1>
+
+    <div class="warning">
+      <strong>⚠️ Important:</strong> This bookmarklet injects the wallet AFTER page load.
+      Most dApps won't detect it because they only look for wallets on initial load.
+      For proper testing, use Playwright with <code>addInitScript</code>.
+    </div>
+
+    <div class="note">
+      <strong>📝 Note:</strong> The bookmarklet below connects to <code>ws://localhost:8546</code>.
+      Make sure the wallet server is running: <code>npm start</code>
+    </div>
+
+    <h2>Installation</h2>
+    <div class="instructions">
+      <ol>
+        <li>Drag the button below to your bookmarks bar</li>
+        <li>Start the wallet server: <code>npm start</code></li>
+        <li>Visit a dApp that supports EIP-6963 wallet selection</li>
+        <li>Click the bookmarklet, then try selecting the wallet</li>
+      </ol>
+    </div>
+
+    <a class="bookmarklet-link" href="javascript:(function(){if(window.__web3TestWallet__){alert('Web3 Test Wallet already loaded');return;}var s=document.createElement('script');s.src='http://localhost:3000/provider.js';s.onload=function(){if(window.__web3TestWallet__){console.log('Web3 Test Wallet loaded');alert('Web3 Test Wallet injected! Try selecting it in the wallet picker.');}};s.onerror=function(){alert('Failed to load. Is the wallet server running on port 3000?');};document.head.appendChild(s);})();">
+      📥 Web3 Test Wallet
+    </a>
+
+    <h2>How It Works</h2>
+    <div class="instructions">
+      <ol>
+        <li>The bookmarklet loads <code>provider.js</code> from the wallet server</li>
+        <li>The script creates an EIP-1193 provider connected via WebSocket</li>
+        <li>It announces itself via EIP-6963</li>
+        <li>Also sets <code>window.ethereum</code> if possible</li>
+      </ol>
+    </div>
+
+    <h2>For Playwright Testing (Recommended)</h2>
+    <div class="instructions">
+      <p>For proper automated testing, inject the provider before page load:</p>
+      <pre style="background: #1a1a2e; padding: 16px; border-radius: 8px; overflow-x: auto;"><code>// In your Playwright test
+const providerScript = await fetch('http://localhost:3000/provider.js').then(r => r.text());
+await page.addInitScript(providerScript);
+await page.goto('https://app.uniswap.org');</code></pre>
+    </div>
+
+    <h2>Direct Access</h2>
+    <div class="instructions">
+      <p>After injection, you can access the wallet directly:</p>
+      <pre style="background: #1a1a2e; padding: 16px; border-radius: 8px;"><code>// In browser console
+window.__web3TestWallet__.request({ method: 'eth_requestAccounts' })
+window.__web3TestWallet__.request({ method: 'eth_chainId' })</code></pre>
+    </div>
+  </div>
+</body>
+</html>
