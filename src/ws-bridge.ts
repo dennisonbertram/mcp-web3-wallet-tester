@@ -274,6 +274,18 @@ export class WebSocketBridge {
           result: { success: true, address },
         };
         ws.send(JSON.stringify(response));
+      } else if (action === 'setChainId') {
+        if (params?.chainId === undefined) {
+          throw new Error('chainId is required for setChainId');
+        }
+        const wallet = this.queue.getWallet();
+        wallet.setChainId(params.chainId);
+        const response: UIResponse = {
+          type: 'ui_response',
+          id,
+          result: { success: true, result: { chainId: params.chainId } },
+        };
+        ws.send(JSON.stringify(response));
       } else if (action === 'getPendingRequests') {
         const requests = this.queue.getPendingRequests();
         const response: UIResponse = {

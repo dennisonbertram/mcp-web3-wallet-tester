@@ -193,6 +193,30 @@ export function createMcpServer(wallet: Wallet, queue: RequestQueue): McpServer 
     }
   );
 
+  // Tool: Set chain ID
+  server.registerTool(
+    'wallet_setChainId',
+    {
+      description: 'Set the chain ID used when signing transactions. Use this when working with mainnet forks (chainId: 1) or other networks.',
+      inputSchema: {
+        chainId: z.number().int().positive().describe('The chain ID to use (e.g., 1 for mainnet, 31337 for Anvil)'),
+      },
+    },
+    async ({ chainId }) => {
+      try {
+        wallet.setChainId(chainId);
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ success: true, chainId }) }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ success: false, error: (error as Error).message }) }],
+          isError: true,
+        };
+      }
+    }
+  );
+
   // Tool: Get status
   server.registerTool(
     'wallet_getStatus',
@@ -572,6 +596,7 @@ console.log('Connected as:', status.address);
 | \`wallet_getAddress\` | Get current wallet address | None | Ethereum address (0x...) |
 | \`wallet_getBalance\` | Get ETH balance | None | Balance in ETH |
 | \`wallet_getChainId\` | Get current chain ID | None | Chain ID (e.g., 31337 for Anvil) |
+| \`wallet_setChainId\` | Set the chain ID for signing | \`chainId\` (number) | Success status and new chainId |
 
 ## Request Management
 
@@ -640,6 +665,22 @@ for (const req of requests) {
   await wallet_approveRequest({ requestId: req.id });
   await new Promise(r => setTimeout(r, 100));
 }
+\`\`\`
+
+## Example: Working with Mainnet Forks
+
+When using Anvil with \`--chain-id 1\` (mainnet fork), set the wallet chain ID to match:
+
+\`\`\`javascript
+// Set chain ID to mainnet for mainnet fork testing
+await wallet_setChainId({ chainId: 1 });
+
+// Verify the change
+const status = await wallet_getStatus();
+console.log('Chain ID:', JSON.parse(status.content[0].text).chainId); // 1
+
+// Reset to Anvil default when done
+await wallet_setChainId({ chainId: 31337 });
 \`\`\`
 `;
 

@@ -115,6 +115,34 @@ export class Wallet {
   }
 
   /**
+   * Set the chain ID used for signing transactions
+   * This recreates the wallet client and public client with the new chain
+   */
+  setChainId(chainId: number): void {
+    if (!Number.isInteger(chainId) || chainId <= 0) {
+      throw new Error('Chain ID must be a positive integer');
+    }
+
+    // Update the chain definition
+    this.chain = {
+      ...foundry,
+      id: chainId,
+    };
+
+    // Recreate clients with new chain
+    this.walletClient = createWalletClient({
+      account: this.account,
+      chain: this.chain,
+      transport: http(this.rpcUrl),
+    });
+
+    this.publicClient = createPublicClient({
+      chain: this.chain,
+      transport: http(this.rpcUrl),
+    });
+  }
+
+  /**
    * Get ETH balance of an address (defaults to wallet address)
    */
   async getBalance(address?: `0x${string}`): Promise<string> {
