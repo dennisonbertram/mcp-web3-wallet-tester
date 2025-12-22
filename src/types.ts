@@ -64,11 +64,12 @@ export interface WalletUIState {
 export interface UIRequest {
   type: 'ui_request';
   id: string;
-  action: 'getState' | 'approveRequest' | 'rejectRequest' | 'switchAccount' | 'getPendingRequests';
+  action: 'getState' | 'approveRequest' | 'rejectRequest' | 'switchAccount' | 'getPendingRequests' | 'setChainId';
   params?: {
     requestId?: string;
     reason?: string;
     accountIndex?: number;
+    chainId?: number;
   };
 }
 
