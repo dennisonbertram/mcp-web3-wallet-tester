@@ -81,7 +81,7 @@
       </ol>
     </div>
 
-    <a class="bookmarklet-link" href="javascript:(function(){if(window.__web3TestWallet__){alert('Web3 Test Wallet already loaded');return;}var s=document.createElement('script');s.src='http://localhost:3000/provider.js';s.onload=function(){if(window.__web3TestWallet__){console.log('Web3 Test Wallet loaded');alert('Web3 Test Wallet injected! Try selecting it in the wallet picker.');}};s.onerror=function(){alert('Failed to load. Is the wallet server running on port 3000?');};document.head.appendChild(s);})();">
+    <a class="bookmarklet-link" href="javascript:(function(){if(window.__web3TestWallet__){alert('Web3 Test Wallet already loaded');return;}var s=document.createElement('script');s.src='http://localhost:3001/provider.js';s.onload=function(){if(window.__web3TestWallet__){console.log('Web3 Test Wallet loaded');alert('Web3 Test Wallet injected! Try selecting it in the wallet picker.');}};s.onerror=function(){alert('Failed to load. Is the wallet server running on port 3001?');};document.head.appendChild(s);})();">
       📥 Web3 Test Wallet
     </a>
 
@@ -99,7 +99,7 @@
     <div class="instructions">
       <p>For proper automated testing, inject the provider before page load:</p>
       <pre style="background: #1a1a2e; padding: 16px; border-radius: 8px; overflow-x: auto;"><code>// In your Playwright test
-const providerScript = await fetch('http://localhost:3000/provider.js').then(r => r.text());
+const providerScript = await fetch('http://localhost:3001/provider.js').then(r => r.text());
 await page.addInitScript(providerScript);
 await page.goto('https://app.uniswap.org');</code></pre>
     </div>

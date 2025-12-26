@@ -27,7 +27,23 @@ npm run build
 
 ### Start the Server
 
-The easiest way to start everything:
+The easiest way to start everything (using the startup script):
+
+```bash
+# Start both Anvil and the wallet server
+./server.sh --anvil
+
+# Or start just the wallet server (if Anvil is already running)
+./server.sh
+
+# Custom ports
+./server.sh --port=4000 --ws-port=9000 --anvil
+
+# For mainnet fork testing
+./server.sh --chain-id=1 --anvil
+```
+
+Or manually:
 
 ```bash
 # Terminal 1: Start Anvil (local blockchain)
@@ -46,7 +62,7 @@ npx web3-wallet-tester
 ### Register with Claude Code
 
 ```bash
-claude mcp add --transport http wallet-tester http://localhost:3000/mcp
+claude mcp add --transport http wallet-tester http://localhost:3001/mcp
 ```
 
 ## Architecture
@@ -73,7 +89,7 @@ Browser (dApp)                     Wallet Server                    Blockchain
 
 ```typescript
 // Fetch provider from the wallet server
-const providerScript = await fetch('http://localhost:3000/provider.js').then(r => r.text());
+const providerScript = await fetch('http://localhost:3001/provider.js').then(r => r.text());
 
 // Inject BEFORE navigating (critical for proper detection)
 await page.addInitScript(providerScript);
@@ -141,7 +157,7 @@ LLMs can read these resources to learn how to use the wallet tester.
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `MCP_PORT` | 3000 | HTTP server port |
+| `MCP_PORT` | 3001 | HTTP server port |
 | `WS_PORT` | 8546 | WebSocket bridge port |
 | `ANVIL_RPC_URL` | http://127.0.0.1:8545 | Anvil RPC URL |
 | `CHAIN_ID` | (auto-detected) | Chain ID to report |
@@ -165,7 +181,7 @@ For reliable testing:
 
 ```javascript
 // 1. Setup
-const providerScript = await fetch('http://localhost:3000/provider.js').then(r => r.text());
+const providerScript = await fetch('http://localhost:3001/provider.js').then(r => r.text());
 await page.addInitScript(providerScript);
 await page.goto('https://example-dapp.com');
 

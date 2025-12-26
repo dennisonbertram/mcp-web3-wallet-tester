@@ -633,9 +633,12 @@ When a dApp requests a transaction, you approve/reject it via MCP tools.
 ### Step 1: Get Provider Script and Inject
 
 \`\`\`javascript
-// Get the provider script
+// Option A: Via MCP tool
 const result = await wallet_getProviderScript();
 const { script } = JSON.parse(result.content[0].text);
+
+// Option B: Via HTTP fetch (useful outside MCP context)
+// const script = await fetch('http://localhost:3001/provider.js').then(r => r.text());
 
 // CRITICAL: Inject BEFORE navigating to the dApp
 await page.addInitScript(script);
@@ -715,9 +718,11 @@ await wallet_setPolicy({
 ## Example: Complete Test Flow (New Way)
 
 \`\`\`javascript
-// 1. Setup
-const scriptResult = await wallet_getProviderScript();
+// 1. Setup - choose one:
+const scriptResult = await wallet_getProviderScript();  // Via MCP tool
 const { script } = JSON.parse(scriptResult.content[0].text);
+// OR: const script = await fetch('http://localhost:3001/provider.js').then(r => r.text());
+
 await page.addInitScript(script);
 await page.goto('https://example-dapp.com');
 
@@ -1044,9 +1049,16 @@ await wallet_setPolicy({
 }
 
 /**
- * Creates the Express app with MCP HTTP endpoint
+ * Helper to serialize objects with BigInt values
  */
-export function createExpressApp(server: McpServer): Express {
+function bigIntReplacer(_key: string, value: unknown): unknown {
+  return typeof value === 'bigint' ? value.toString() : value;
+}
+
+/**
+ * Creates the Express app with MCP HTTP endpoint and JSON API endpoints
+ */
+export function createExpressApp(server: McpServer, wallet: Wallet, queue: RequestQueue): Express {
   const app = express();
   app.use(express.json());
 
@@ -1070,11 +1082,142 @@ export function createExpressApp(server: McpServer): Express {
     res.json({ status: 'ok' });
   });
 
-  // Serve provider.js for injection
-  app.get('/provider.js', (_req: Request, res: Response) => {
+  // JSON API: Get full wallet status
+  app.get('/api/status', async (_req: Request, res: Response) => {
+    try {
+      const status = {
+        address: wallet.getAddress(),
+        accountIndex: wallet.getAccountIndex(),
+        chainId: wallet.getChainId(),
+        balance: await wallet.getBalance(),
+        pendingRequests: queue.getPendingCount(),
+        autoApprove: queue.isAutoApproveEnabled(),
+      };
+      res.json(status);
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  // JSON API: Get pending requests
+  app.get('/api/pending', (_req: Request, res: Response) => {
+    try {
+      const requests = queue.getPendingRequests();
+      res.json(requests);
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  // JSON API: Approve a request
+  app.post('/api/approve', async (req: Request, res: Response) => {
+    try {
+      const { requestId } = req.body as { requestId?: string };
+      if (!requestId) {
+        res.status(400).json({ error: 'requestId is required' });
+        return;
+      }
+
+      const result = await queue.approveRequest(requestId);
+      res.json({ success: true, result: JSON.parse(JSON.stringify(result, bigIntReplacer)) });
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error as Error).message });
+    }
+  });
+
+  // JSON API: Reject a request
+  app.post('/api/reject', (req: Request, res: Response) => {
+    try {
+      const { requestId, reason } = req.body as { requestId?: string; reason?: string };
+      if (!requestId) {
+        res.status(400).json({ error: 'requestId is required' });
+        return;
+      }
+
+      queue.rejectRequest(requestId, reason);
+      res.json({ success: true, message: 'Request rejected' });
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error as Error).message });
+    }
+  });
+
+  // JSON API: Set auto-approve mode
+  app.post('/api/auto-approve', (req: Request, res: Response) => {
+    try {
+      const { enabled } = req.body as { enabled?: boolean };
+      if (typeof enabled !== 'boolean') {
+        res.status(400).json({ error: 'enabled (boolean) is required' });
+        return;
+      }
+
+      queue.setAutoApprove(enabled);
+      res.json({ success: true, autoApprove: enabled });
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error as Error).message });
+    }
+  });
+
+  // JSON API: Wait for a request
+  app.post('/api/wait', async (req: Request, res: Response) => {
+    try {
+      const { timeoutMs } = req.body as { timeoutMs?: number };
+      const request = await queue.waitForRequest(timeoutMs ?? 30000);
+      res.json(request);
+    } catch (error) {
+      res.status(408).json({ error: (error as Error).message });
+    }
+  });
+
+  // JSON API: Get provider script as JSON
+  app.get('/api/provider', (req: Request, res: Response) => {
     try {
       const providerPath = join(__dirname, '..', 'dist', 'provider.js');
-      const providerScript = readFileSync(providerPath, 'utf-8');
+      let providerScript = readFileSync(providerPath, 'utf-8');
+
+      // If wsUrl query param is provided, inject it
+      const wsUrl = req.query.wsUrl as string | undefined;
+      if (wsUrl) {
+        providerScript = `window.__WEB3_TEST_WALLET_WS_URL__ = "${wsUrl}";\n${providerScript}`;
+      }
+
+      res.json({ script: providerScript });
+    } catch {
+      res.status(500).json({ error: 'Provider script not found. Run npm run build:provider first.' });
+    }
+  });
+
+  // Serve provider.js for injection (with optional wsUrl query param)
+  app.get('/provider.js', (req: Request, res: Response) => {
+    try {
+      const providerPath = join(__dirname, '..', 'dist', 'provider.js');
+      let providerScript = readFileSync(providerPath, 'utf-8');
+
+      // If wsUrl query param is provided, inject it
+      const wsUrl = req.query.wsUrl as string | undefined;
+      if (wsUrl) {
+        providerScript = `window.__WEB3_TEST_WALLET_WS_URL__ = "${wsUrl}";\n${providerScript}`;
+      }
+
+      res.setHeader('Content-Type', 'application/javascript');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.send(providerScript);
+    } catch {
+      res.status(500).json({ error: 'Provider script not found. Run npm run build:provider first.' });
+    }
+  });
+
+  // Also provide provider.js at /api/provider.js for consistency
+  app.get('/api/provider.js', (req: Request, res: Response) => {
+    try {
+      const providerPath = join(__dirname, '..', 'dist', 'provider.js');
+      let providerScript = readFileSync(providerPath, 'utf-8');
+
+      // If wsUrl query param is provided, inject it
+      const wsUrl = req.query.wsUrl as string | undefined;
+      if (wsUrl) {
+        providerScript = `window.__WEB3_TEST_WALLET_WS_URL__ = "${wsUrl}";\n${providerScript}`;
+      }
+
       res.setHeader('Content-Type', 'application/javascript');
       res.setHeader('Cache-Control', 'no-cache');
       res.send(providerScript);

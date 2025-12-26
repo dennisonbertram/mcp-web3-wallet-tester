@@ -26,7 +26,7 @@ For automated testing, inject the provider **before** the page loads:
 
 ```typescript
 // Fetch the provider script from the wallet server
-const providerScript = await fetch('http://localhost:3000/provider.js').then(r => r.text());
+const providerScript = await fetch('http://localhost:3001/provider.js').then(r => r.text());
 
 // Inject BEFORE navigating to the dApp
 await page.addInitScript(providerScript);
@@ -45,14 +45,14 @@ For development and testing your own dApps:
 
 ```html
 <!-- Add to your HTML before any dApp scripts -->
-<script src="http://localhost:3000/provider.js"></script>
+<script src="http://localhost:3001/provider.js"></script>
 ```
 
 Or dynamically:
 
 ```javascript
 const script = document.createElement('script');
-script.src = 'http://localhost:3000/provider.js';
+script.src = 'http://localhost:3001/provider.js';
 document.head.appendChild(script);
 await new Promise(r => setTimeout(r, 1000)); // Wait for init
 ```
@@ -134,7 +134,7 @@ await page.goto('https://app.example.com');
 
 **Solution:** Ensure wallet server is running:
 ```bash
-curl http://localhost:3000/health
+curl http://localhost:3001/health
 # Should return: {"status":"ok"}
 ```
 

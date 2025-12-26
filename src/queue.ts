@@ -664,7 +664,7 @@ export class RequestQueue {
               category,
               reason: decision.reason ?? 'Rejected by policy',
             });
-          } catch (error) {
+          } catch {
             // Request might have been handled already
           }
         }
