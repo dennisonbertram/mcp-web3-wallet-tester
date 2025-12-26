@@ -859,99 +859,172 @@ The original tools still work for fine-grained control:
     async (uri) => {
       const toolsList = `# MCP Web3 Wallet Tester - Available Tools
 
-## Wallet Information
+## High-Level Tools (Recommended for LLMs)
 
-| Tool | Description | Parameters | Returns |
-|------|-------------|------------|---------|
-| \`wallet_getStatus\` | Get full wallet status | None | Status object with address, chainId, balance, pending requests count, auto-approve mode |
-| \`wallet_getAddress\` | Get current wallet address | None | Ethereum address (0x...) |
-| \`wallet_getBalance\` | Get ETH balance | None | Balance in ETH |
-| \`wallet_getChainId\` | Get current chain ID | None | Chain ID (e.g., 31337 for Anvil) |
-| \`wallet_setChainId\` | Set the chain ID for signing | \`chainId\` (number) | Success status and new chainId |
+These tools provide the best LLM experience with minimal calls needed:
 
-## Request Management
+| Tool | Description | When to Use |
+|------|-------------|-------------|
+| \`wallet_getContext\` | Get complete wallet state in one call | Start of session, verify state |
+| \`wallet_connectDapp\` | Handle entire dApp connection flow | After clicking "Connect Wallet" |
+| \`wallet_drainRequests\` | Process all pending requests to idle | After any wallet interaction |
+| \`wallet_setPolicy\` | Configure auto-approval rules | Once at session start |
+| \`wallet_waitForTx\` | Wait for transaction confirmation | After tx is approved |
+| \`wallet_waitForIdle\` | Wait for request queue to be empty | Before checking state |
 
-| Tool | Description | Parameters | Returns |
-|------|-------------|------------|---------|
-| \`wallet_getPendingRequests\` | List all pending requests | None | Array of pending requests with id, method, params |
-| \`wallet_approveRequest\` | Approve a pending request | \`requestId\` (string) | Success status and result |
-| \`wallet_rejectRequest\` | Reject a pending request | \`requestId\` (string), \`reason\` (optional string) | Success status |
-| \`wallet_waitForRequest\` | Wait for a request to arrive | \`timeoutMs\` (optional number, default 30000) | First pending request or timeout error |
-| \`wallet_setAutoApprove\` | Enable/disable auto-approve mode | \`enabled\` (boolean) | Current auto-approve status |
+### wallet_getContext
 
-## Transaction Management
-
-| Tool | Description | Parameters | Returns |
-|------|-------------|------------|---------|
-| \`wallet_getTransactionReceipt\` | Get transaction receipt | \`hash\` (string) | Transaction receipt with status, gasUsed, logs, etc. |
-
-## Account Management
-
-| Tool | Description | Parameters | Returns |
-|------|-------------|------------|---------|
-| \`wallet_listAccounts\` | List all available Anvil accounts | None | Array of 10 accounts with index, address, and initial balance |
-| \`wallet_switchAccount\` | Switch to different Anvil account | \`accountIndex\` (number 0-9) | Success status, new address, and balance |
-| \`wallet_setPrivateKey\` | Switch to custom private key | \`privateKey\` (string, 0x...) | Success status, address, and balance |
-
-## Common Request Types
-
-The wallet server handles these Web3 request methods:
-
-- \`eth_requestAccounts\` - Connect wallet and get accounts
-- \`eth_accounts\` - Get current accounts
-- \`eth_chainId\` - Get chain ID
-- \`eth_sendTransaction\` - Send a transaction
-- \`personal_sign\` - Sign a message
-- \`eth_signTypedData_v4\` - Sign typed data (EIP-712)
-- \`wallet_requestPermissions\` - Request permissions (may not be supported)
-
-## Usage Pattern
-
-1. **Check status**: Use \`wallet_getStatus\` to verify connection
-2. **Trigger action**: Interact with dApp (click button, submit form)
-3. **Wait**: Allow time for requests to queue (500ms-1s)
-4. **Check pending**: Use \`wallet_getPendingRequests\` to see what needs approval
-5. **Approve**: Use \`wallet_approveRequest\` for each request
-6. **Verify**: Check transaction receipts or dApp state
-
-## Auto-Approve Mode
-
-For fully automated testing:
-
-\`\`\`javascript
-await wallet_setAutoApprove({ enabled: true });
-// All requests now auto-approved
-await wallet_setAutoApprove({ enabled: false });
-\`\`\`
-
-**Warning**: Only use auto-approve in trusted test environments.
-
-## Example: Approve All Pending
-
-\`\`\`javascript
-const pending = await wallet_getPendingRequests();
-const requests = JSON.parse(pending.content[0].text);
-
-for (const req of requests) {
-  await wallet_approveRequest({ requestId: req.id });
-  await new Promise(r => setTimeout(r, 100));
+Returns complete wallet state in a single call:
+\`\`\`json
+{
+  "active": { "address": "0x...", "accountIndex": 0 },
+  "chain": { "chainId": 31337, "name": "anvil" },
+  "balances": { "eth": "10000.0" },
+  "policy": { "mode": "auto", "allowMethods": [...] },
+  "pendingCount": 2,
+  "pendingSummary": [
+    { "id": "req_abc", "method": "eth_requestAccounts", "category": "connect", "summary": "Request to connect wallet" }
+  ]
 }
 \`\`\`
 
-## Example: Working with Mainnet Forks
+### wallet_setPolicy
 
-When using Anvil with \`--chain-id 1\` (mainnet fork), set the wallet chain ID to match:
-
+Configure approval behavior:
 \`\`\`javascript
-// Set chain ID to mainnet for mainnet fork testing
-await wallet_setChainId({ chainId: 1 });
+await wallet_setPolicy({
+  mode: 'auto',           // 'auto' uses rules, 'manual' requires all approvals
+  allowMethods: ['eth_chainId', 'eth_requestAccounts'],
+  denyMethods: ['wallet_requestPermissions'],
+  maxValueEth: 0.1,       // Auto-approve tx under this value
+  allowTo: ['0xTrustedContract'],
+  denyTo: ['0xScamContract'],
+  chainId: 31337          // Reject requests for wrong chain
+});
+\`\`\`
 
-// Verify the change
-const status = await wallet_getStatus();
-console.log('Chain ID:', JSON.parse(status.content[0].text).chainId); // 1
+### wallet_drainRequests
 
-// Reset to Anvil default when done
-await wallet_setChainId({ chainId: 31337 });
+Process all pending requests:
+\`\`\`javascript
+const result = await wallet_drainRequests({
+  timeoutMs: 15000,    // Max wait time
+  settleMs: 300,       // Idle detection threshold
+  maxDepth: 50,        // Max requests to process
+  policy: { ... }      // Optional per-call policy override
+});
+// Returns:
+// {
+//   "status": "idle",
+//   "approved": [{ "id": "...", "method": "eth_sendTransaction", "txHash": "0x..." }],
+//   "rejected": [...],
+//   "finalState": { /* WalletContext */ }
+// }
+\`\`\`
+
+### wallet_connectDapp
+
+High-level connection helper:
+\`\`\`javascript
+await page.click('Connect Wallet');
+const result = await wallet_connectDapp({ timeoutMs: 10000 });
+// { "success": true, "address": "0x...", "chainId": 31337, "approved": [...] }
+\`\`\`
+
+### wallet_waitForTx
+
+Wait for transaction confirmation:
+\`\`\`javascript
+const receipt = await wallet_waitForTx({ hash: "0x..." });
+// { "success": true, "status": "confirmed", "blockNumber": 123, "gasUsed": "21000" }
+\`\`\`
+
+## Simple Request Tools (No ID Required)
+
+| Tool | Description |
+|------|-------------|
+| \`wallet_approveNext\` | Approve oldest pending request |
+| \`wallet_rejectNext\` | Reject oldest pending request |
+
+## Wallet Information
+
+| Tool | Description |
+|------|-------------|
+| \`wallet_getStatus\` | Legacy status (use wallet_getContext instead) |
+| \`wallet_getAddress\` | Get current wallet address |
+| \`wallet_getBalance\` | Get ETH balance |
+| \`wallet_getChainId\` | Get chain ID |
+| \`wallet_setChainId\` | Set chain ID for signing |
+
+## Request Management (Fine-Grained Control)
+
+| Tool | Description |
+|------|-------------|
+| \`wallet_getPendingRequests\` | List pending requests with categories and summaries |
+| \`wallet_approveRequest\` | Approve specific request by ID |
+| \`wallet_rejectRequest\` | Reject specific request by ID |
+| \`wallet_waitForRequest\` | Block until a request arrives |
+| \`wallet_setAutoApprove\` | Legacy global toggle (prefer wallet_setPolicy) |
+
+## Transaction Management
+
+| Tool | Description |
+|------|-------------|
+| \`wallet_getTransactionReceipt\` | Get receipt without waiting |
+| \`wallet_waitForTx\` | Wait for tx to be mined (recommended) |
+
+## Account Management
+
+| Tool | Description |
+|------|-------------|
+| \`wallet_listAccounts\` | List all 10 Anvil test accounts |
+| \`wallet_switchAccount\` | Switch to Anvil account (0-9) |
+| \`wallet_setPrivateKey\` | Use custom private key |
+
+## Provider Injection
+
+| Tool | Description |
+|------|-------------|
+| \`wallet_getProviderScript\` | Get provider.js with usage snippet |
+
+## Request Categories
+
+Requests are categorized for easier understanding:
+
+| Category | Methods | Typical Action |
+|----------|---------|----------------|
+| connect | eth_requestAccounts, eth_accounts | Auto-approve |
+| read | eth_chainId, eth_blockNumber, eth_getBalance | Auto-approve |
+| sign | personal_sign, eth_signTypedData_v4 | Review carefully |
+| transaction | eth_sendTransaction | Check value/recipient |
+| chain | wallet_switchEthereumChain | Usually approve |
+
+## Recommended Workflow
+
+1. **Start**: \`wallet_getContext()\` to check state
+2. **Configure**: \`wallet_setPolicy()\` with your rules
+3. **Connect**: Click connect → \`wallet_connectDapp()\`
+4. **Interact**: Click action → \`wallet_drainRequests()\`
+5. **Verify**: \`wallet_waitForTx()\` for transactions
+
+## Example Policy Presets
+
+**Testing Mode (Auto-approve everything)**:
+\`\`\`javascript
+await wallet_setPolicy({
+  mode: 'auto',
+  allowMethods: ['eth_chainId', 'eth_requestAccounts', 'eth_sendTransaction', 'personal_sign'],
+  maxValueEth: 100
+});
+\`\`\`
+
+**Safe Mode (Manual approval for value transfers)**:
+\`\`\`javascript
+await wallet_setPolicy({
+  mode: 'auto',
+  allowMethods: ['eth_chainId', 'eth_requestAccounts', 'eth_estimateGas'],
+  maxValueEth: 0  // All transactions require manual approval
+});
 \`\`\`
 `;
 
