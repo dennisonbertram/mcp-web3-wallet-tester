@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import type { RequestQueue } from './queue.js';
 import { Wallet } from './wallet.js';
+import type { WalletPolicy } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -50,15 +51,15 @@ export function createMcpServer(wallet: Wallet, queue: RequestQueue): McpServer 
     }
   );
 
-  // Tool: Get pending requests
+  // Tool: Get pending requests (enhanced with categories and summaries)
   server.registerTool(
     'wallet_getPendingRequests',
     {
-      description: 'Get all pending wallet requests waiting for approval',
+      description: 'Get all pending wallet requests with enhanced information including category, human-readable summary, and risk flags.',
       inputSchema: {},
     },
     async () => {
-      const requests = queue.getPendingRequests();
+      const requests = queue.getEnhancedPendingRequests();
       return {
         content: [{ type: 'text', text: JSON.stringify(requests, null, 2) }],
       };
@@ -319,7 +320,7 @@ export function createMcpServer(wallet: Wallet, queue: RequestQueue): McpServer 
   server.registerTool(
     'wallet_getProviderScript',
     {
-      description: 'Get the provider injection script for use with Playwright addInitScript. Returns JavaScript code that should be injected before page load to enable wallet functionality.',
+      description: 'Get the provider injection script for use with Playwright addInitScript. Returns JavaScript code that should be injected BEFORE page load to enable wallet functionality. Also includes a usage snippet showing how to inject it.',
       inputSchema: {
         wsUrl: z.string().optional().describe('WebSocket URL (default: ws://localhost:8546)'),
       },
@@ -334,8 +335,20 @@ export function createMcpServer(wallet: Wallet, queue: RequestQueue): McpServer 
           script = `window.__WEB3_TEST_WALLET_WS_URL__ = "${wsUrl}";\n${script}`;
         }
 
+        const usageSnippet = `// Inject BEFORE navigating to the page
+const providerScript = \`${script.slice(0, 50)}...\`;  // Use full script from 'script' field
+await page.addInitScript(providerScript);
+await page.goto('https://your-dapp.com');`;
+
         return {
-          content: [{ type: 'text', text: script }],
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              script,
+              usageSnippet,
+              note: 'IMPORTANT: Inject this script BEFORE navigating to the dApp using page.addInitScript()',
+            }, null, 2)
+          }],
         };
       } catch {
         return {
@@ -343,6 +356,249 @@ export function createMcpServer(wallet: Wallet, queue: RequestQueue): McpServer 
           isError: true,
         };
       }
+    }
+  );
+
+  // Tool: Get unified wallet context
+  server.registerTool(
+    'wallet_getContext',
+    {
+      description: 'Get complete wallet context including address, chain, balance, policy, and pending requests summary. This is the preferred way to get wallet state - use instead of multiple individual status calls.',
+      inputSchema: {},
+    },
+    async () => {
+      const context = await queue.getContext();
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(context, null, 2)
+        }],
+      };
+    }
+  );
+
+  // Tool: Set wallet approval policy
+  server.registerTool(
+    'wallet_setPolicy',
+    {
+      description: 'Configure the wallet approval policy. Controls which requests are auto-approved vs require manual approval. Set mode to "auto" with allowMethods for automated testing, or "manual" for full control.',
+      inputSchema: {
+        mode: z.enum(['manual', 'auto']).optional().describe('Policy mode: "manual" requires approval for all, "auto" uses rules'),
+        allowMethods: z.array(z.string()).optional().describe('Methods to auto-approve (e.g., ["eth_chainId", "eth_requestAccounts"])'),
+        denyMethods: z.array(z.string()).optional().describe('Methods to always reject'),
+        maxValueEth: z.number().optional().describe('Maximum ETH value to auto-approve for transactions'),
+        allowTo: z.array(z.string()).optional().describe('Contract addresses to auto-approve'),
+        denyTo: z.array(z.string()).optional().describe('Contract addresses to always reject'),
+        chainId: z.number().optional().describe('Expected chain ID (reject mismatches)'),
+      },
+    },
+    async ({ mode, allowMethods, denyMethods, maxValueEth, allowTo, denyTo, chainId }) => {
+      const policy: Partial<WalletPolicy> = {};
+      if (mode !== undefined) policy.mode = mode;
+      if (allowMethods !== undefined) policy.allowMethods = allowMethods;
+      if (denyMethods !== undefined) policy.denyMethods = denyMethods;
+      if (maxValueEth !== undefined) policy.maxValueEth = maxValueEth;
+      if (allowTo !== undefined) policy.allowTo = allowTo as `0x${string}`[];
+      if (denyTo !== undefined) policy.denyTo = denyTo as `0x${string}`[];
+      if (chainId !== undefined) policy.chainId = chainId;
+
+      queue.setPolicy(policy);
+      const currentPolicy = queue.getPolicy();
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ success: true, policy: currentPolicy }, null, 2) }],
+      };
+    }
+  );
+
+  // Tool: Drain all pending requests according to policy
+  server.registerTool(
+    'wallet_drainRequests',
+    {
+      description: 'Process all pending wallet requests according to policy until the queue is idle. This is the PRIMARY tool for handling wallet interactions - use instead of manual approve loops. Returns a summary of all approved/rejected requests.',
+      inputSchema: {
+        timeoutMs: z.number().optional().describe('Timeout in ms (default: 15000)'),
+        settleMs: z.number().optional().describe('Time with no new requests to consider idle (default: 300)'),
+        maxDepth: z.number().optional().describe('Maximum requests to process (default: 50)'),
+        policy: z.object({
+          mode: z.enum(['manual', 'auto']).optional(),
+          allowMethods: z.array(z.string()).optional(),
+          denyMethods: z.array(z.string()).optional(),
+          maxValueEth: z.number().optional(),
+          allowTo: z.array(z.string()).optional(),
+          denyTo: z.array(z.string()).optional(),
+          chainId: z.number().optional(),
+        }).optional().describe('Override policy for this drain operation only'),
+      },
+    },
+    async ({ timeoutMs, settleMs, maxDepth, policy }) => {
+      const result = await queue.drainRequests({
+        timeoutMs,
+        settleMs,
+        maxDepth,
+        policy: policy as WalletPolicy | undefined,
+      });
+
+      // Create a concise summary for LLM consumption
+      const summary = `Drained ${result.approved.length + result.rejected.length} requests: approved ${result.approved.length}, rejected ${result.rejected.length}. Status: ${result.status}`;
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ summary, ...result }, null, 2)
+        }],
+      };
+    }
+  );
+
+  // Tool: Wait until wallet is idle
+  server.registerTool(
+    'wallet_waitForIdle',
+    {
+      description: 'Wait until the wallet queue is idle (no new requests for settleMs). Use this after triggering UI actions to ensure all requests have been captured before processing.',
+      inputSchema: {
+        settleMs: z.number().optional().describe('Time with no new requests to consider idle (default: 300)'),
+        timeoutMs: z.number().optional().describe('Timeout in ms (default: 15000)'),
+      },
+    },
+    async ({ settleMs, timeoutMs }) => {
+      const isIdle = await queue.waitForIdle(settleMs ?? 300, timeoutMs ?? 15000);
+      const pendingCount = queue.getPendingCount();
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            idle: isIdle,
+            pendingCount,
+            message: isIdle ? 'Queue is idle' : 'Timeout waiting for idle state'
+          })
+        }],
+      };
+    }
+  );
+
+  // Tool: Approve next pending request
+  server.registerTool(
+    'wallet_approveNext',
+    {
+      description: 'Approve the next pending request in FIFO order. Use this when you want to approve requests sequentially without managing IDs. Returns null if no pending requests.',
+      inputSchema: {},
+    },
+    async () => {
+      const result = await queue.approveNext();
+      if (result === null) {
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No pending requests' }) }],
+        };
+      }
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ success: true, ...result }, null, 2) }],
+      };
+    }
+  );
+
+  // Tool: Reject next pending request
+  server.registerTool(
+    'wallet_rejectNext',
+    {
+      description: 'Reject the next pending request in FIFO order. Use this when you want to reject requests sequentially without managing IDs. Returns null if no pending requests.',
+      inputSchema: {
+        reason: z.string().optional().describe('Reason for rejection'),
+      },
+    },
+    async ({ reason }) => {
+      const result = queue.rejectNext(reason);
+      if (result === null) {
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No pending requests' }) }],
+        };
+      }
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ success: true, ...result }) }],
+      };
+    }
+  );
+
+  // Tool: Wait for transaction confirmation
+  server.registerTool(
+    'wallet_waitForTx',
+    {
+      description: 'Wait for a transaction to be mined and return the receipt. Use after approving a transaction to confirm it succeeded.',
+      inputSchema: {
+        hash: z.string().describe('The transaction hash to wait for'),
+      },
+    },
+    async ({ hash }) => {
+      try {
+        const receipt = await wallet.waitForTransaction(hash as `0x${string}`);
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              success: true,
+              status: receipt.status === 'success' ? 'confirmed' : 'reverted',
+              blockNumber: Number(receipt.blockNumber),
+              gasUsed: receipt.gasUsed.toString(),
+              transactionHash: receipt.transactionHash,
+            }, null, 2)
+          }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ success: false, error: (error as Error).message }) }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool: Connect to dApp (high-level)
+  server.registerTool(
+    'wallet_connectDapp',
+    {
+      description: 'High-level tool to handle dApp wallet connection. Automatically approves connect-related requests (eth_chainId, eth_requestAccounts) and waits until the connection flow completes. Use this after clicking "Connect Wallet" in a dApp.',
+      inputSchema: {
+        timeoutMs: z.number().optional().describe('Timeout in ms (default: 10000)'),
+      },
+    },
+    async ({ timeoutMs }) => {
+      // Set a temporary policy that only approves connect-related methods
+      const connectPolicy: WalletPolicy = {
+        mode: 'auto',
+        allowMethods: [
+          'eth_chainId',
+          'eth_requestAccounts',
+          'eth_accounts',
+          'net_version',
+          'wallet_switchEthereumChain',
+          'wallet_addEthereumChain',
+          'wallet_requestPermissions',
+        ],
+        maxValueEth: 0, // Don't auto-approve any value transfers
+      };
+
+      const result = await queue.drainRequests({
+        policy: connectPolicy,
+        timeoutMs: timeoutMs ?? 10000,
+        settleMs: 500,
+        maxDepth: 20,
+      });
+
+      const address = wallet.getAddress();
+      const chainId = wallet.getChainId();
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            success: result.status === 'idle',
+            connected: true,
+            address,
+            chainId,
+            approved: result.approved.map(r => r.method),
+            rejected: result.rejected.map(r => ({ method: r.method, reason: r.reason })),
+          }, null, 2)
+        }],
+      };
     }
   );
 
@@ -372,125 +628,140 @@ When a dApp requests a transaction, you approve/reject it via MCP tools.
 1. **Anvil must be running**: \`anvil\`
 2. **Wallet server must be running**: \`npm start\` or \`web3-wallet-tester\`
 
-## Essential Workflow
+## NEW: Simplified Workflow (Recommended)
 
-### Step 1: Inject the Provider (Playwright)
+### Step 1: Get Provider Script and Inject
 
 \`\`\`javascript
-// Fetch provider from wallet server
-const providerScript = await fetch('http://localhost:3000/provider.js').then(r => r.text());
+// Get the provider script
+const result = await wallet_getProviderScript();
+const { script } = JSON.parse(result.content[0].text);
 
 // CRITICAL: Inject BEFORE navigating to the dApp
-await page.addInitScript(providerScript);
+await page.addInitScript(script);
 
 // Now navigate
 await page.goto('https://app.uniswap.org');
 \`\`\`
 
-### Step 2: Trigger an Action
-
-Click a button in the dApp (e.g., "Connect Wallet", "Swap", "Send").
+### Step 2: Connect Wallet (One Call!)
 
 \`\`\`javascript
+// Click connect in the dApp
 await page.click('button:has-text("Connect Wallet")');
-await new Promise(r => setTimeout(r, 500)); // Wait for requests to queue
+
+// Use wallet_connectDapp to handle the entire connection flow
+const result = await wallet_connectDapp();
+const connection = JSON.parse(result.content[0].text);
+// Returns: { success: true, address: "0x...", chainId: 31337, approved: [...] }
 \`\`\`
 
-### Step 3: Approve Requests
+### Step 3: Handle Transactions (One Call!)
 
 \`\`\`javascript
-// Get pending requests
-const pending = await wallet_getPendingRequests();
+// Click a transaction button in the dApp
+await page.click('button:has-text("Swap")');
 
-// Approve each one
-for (const req of pending) {
-  await wallet_approveRequest({ requestId: req.id });
-  await new Promise(r => setTimeout(r, 100));
+// Use wallet_drainRequests to handle all wallet requests
+const result = await wallet_drainRequests({
+  policy: {
+    mode: 'auto',
+    allowMethods: ['eth_chainId', 'eth_estimateGas'],
+    maxValueEth: 0.1  // Auto-approve transactions under 0.1 ETH
+  }
+});
+const drainResult = JSON.parse(result.content[0].text);
+// Returns: { status: 'idle', approved: [...], rejected: [...], finalState: {...} }
+
+// If a transaction was sent, wait for confirmation
+const txHash = drainResult.approved.find(r => r.txHash)?.txHash;
+if (txHash) {
+  const receipt = await wallet_waitForTx({ hash: txHash });
 }
 \`\`\`
 
-### Step 4: Check for More Requests
-
-Many operations trigger multiple requests. Always check again:
-
-\`\`\`javascript
-await new Promise(r => setTimeout(r, 500));
-const more = await wallet_getPendingRequests();
-// Approve if needed...
-\`\`\`
-
-## Key MCP Tools
+## Key MCP Tools (New API)
 
 | Tool | When to Use |
 |------|-------------|
-| \`wallet_getStatus\` | Check if server is running, see current state |
-| \`wallet_getPendingRequests\` | See what needs approval |
-| \`wallet_approveRequest\` | Approve a transaction/signature |
-| \`wallet_rejectRequest\` | Deny a request |
-| \`wallet_waitForRequest\` | Block until a request arrives |
-| \`wallet_setAutoApprove\` | Auto-approve all requests (for automated tests) |
-| \`wallet_getTransactionReceipt\` | Verify a transaction succeeded |
-| \`wallet_getProviderScript\` | Get the provider.js content directly |
+| \`wallet_getContext\` | Get all wallet state in one call (address, chain, balance, policy, pending) |
+| \`wallet_connectDapp\` | After clicking "Connect Wallet" - handles entire connection flow |
+| \`wallet_drainRequests\` | After any wallet interaction - processes all pending requests |
+| \`wallet_setPolicy\` | Configure auto-approve rules once at the start |
+| \`wallet_waitForTx\` | Wait for a transaction to be mined |
+| \`wallet_waitForIdle\` | Wait until no more requests are arriving |
+| \`wallet_approveNext\` | Approve next request without managing IDs |
+| \`wallet_rejectNext\` | Reject next request without managing IDs |
 
-## Auto-Approve Mode
-
-For fully automated testing where you trust all requests:
+## Policies: Control Auto-Approval
 
 \`\`\`javascript
-await wallet_setAutoApprove({ enabled: true });
-// Now all requests are automatically approved
+// Set a policy once at the start
+await wallet_setPolicy({
+  mode: 'auto',
+  allowMethods: [
+    'eth_chainId',
+    'eth_requestAccounts',
+    'eth_estimateGas',
+    'eth_gasPrice'
+  ],
+  maxValueEth: 0.5,  // Auto-approve tx under 0.5 ETH
+  // denyTo: ['0xScamContract...']  // Block specific contracts
+});
+
+// Now wallet_drainRequests uses this policy automatically
 \`\`\`
 
-## Common Pitfalls
-
-1. **Inject provider BEFORE page load** - Not after!
-2. **Wait for requests to queue** - Add 500ms delay after clicking
-3. **Check for additional requests** - Most operations trigger 2-3 requests
-4. **Some methods may fail** - \`wallet_requestPermissions\` often fails, that's OK
-
-## Verifying Server Status
-
-\`\`\`javascript
-const status = await wallet_getStatus();
-// Returns: { address, chainId, balance, pendingRequests, autoApprove }
-\`\`\`
-
-## Example: Complete Connection + Transaction
+## Example: Complete Test Flow (New Way)
 
 \`\`\`javascript
 // 1. Setup
-const script = await fetch('http://localhost:3000/provider.js').then(r => r.text());
+const scriptResult = await wallet_getProviderScript();
+const { script } = JSON.parse(scriptResult.content[0].text);
 await page.addInitScript(script);
 await page.goto('https://example-dapp.com');
 
-// 2. Connect
+// 2. Set a permissive policy for testing
+await wallet_setPolicy({
+  mode: 'auto',
+  allowMethods: ['eth_chainId', 'eth_requestAccounts', 'eth_sendTransaction'],
+  maxValueEth: 1.0
+});
+
+// 3. Connect
 await page.click('button:has-text("Connect")');
-await new Promise(r => setTimeout(r, 500));
+const connResult = await wallet_connectDapp();
+const connection = JSON.parse(connResult.content[0].text);
+console.log('Connected as:', connection.address);
 
-// 3. Approve connection
-let pending = await wallet_getPendingRequests();
-for (const req of pending) {
-  await wallet_approveRequest({ requestId: req.id });
+// 4. Send transaction
+await page.click('button:has-text("Send")');
+const drainResult = await wallet_drainRequests();
+const result = JSON.parse(drainResult.content[0].text);
+
+// 5. Wait for confirmation
+const txHash = result.approved.find(r => r.txHash)?.txHash;
+if (txHash) {
+  const receipt = await wallet_waitForTx({ hash: txHash });
+  const txInfo = JSON.parse(receipt.content[0].text);
+  console.log('Transaction:', txInfo.status);
 }
-
-// 4. Check for more
-await new Promise(r => setTimeout(r, 500));
-pending = await wallet_getPendingRequests();
-for (const req of pending) {
-  await wallet_approveRequest({ requestId: req.id });
-}
-
-// 5. Verify connected
-const status = await wallet_getStatus();
-console.log('Connected as:', status.address);
 \`\`\`
+
+## Legacy Tools (Still Available)
+
+The original tools still work for fine-grained control:
+- \`wallet_getPendingRequests\` - Now returns enhanced requests with categories
+- \`wallet_approveRequest\` - Approve by specific ID
+- \`wallet_rejectRequest\` - Reject by specific ID
+- \`wallet_setAutoApprove\` - Global auto-approve toggle (prefer wallet_setPolicy)
 
 ## Need More Help?
 
 - Read \`wallet://docs/instructions\` for detailed workflow
 - Read \`wallet://docs/tools\` for complete tool reference
-- Read \`wallet://docs/testing-guide\` for troubleshooting
 `;
+
 
       return {
         contents: [

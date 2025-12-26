@@ -1,7 +1,8 @@
 import { randomUUID } from 'crypto';
-import type { WalletRequest, SerializedWalletRequest, TransactionParams } from './types.js';
-import { EIP1193_ERRORS } from './types.js';
+import type { WalletRequest, SerializedWalletRequest, TransactionParams, WalletPolicy, DrainOptions, DrainResult, EnhancedRequest, WalletContext } from './types.js';
+import { EIP1193_ERRORS, DEFAULT_POLICY } from './types.js';
 import type { Wallet } from './wallet.js';
+import { enhanceRequest, categorizeMethod } from './request-utils.js';
 
 /**
  * Subscription types supported by eth_subscribe
@@ -34,6 +35,7 @@ export class RequestQueue {
   private subscriptions: Map<string, Subscription> = new Map();
   private subscriptionCallback: SubscriptionCallback | null = null;
   private lastBlockNumber: bigint | null = null;
+  private policy: WalletPolicy = DEFAULT_POLICY;
 
   constructor(wallet: Wallet) {
     this.wallet = wallet;
@@ -432,5 +434,293 @@ export class RequestQueue {
    */
   getSubscriptionCount(): number {
     return this.subscriptions.size;
+  }
+
+  /**
+   * Set the approval policy
+   */
+  setPolicy(policy: Partial<WalletPolicy>): void {
+    this.policy = { ...this.policy, ...policy };
+  }
+
+  /**
+   * Get the current policy
+   */
+  getPolicy(): WalletPolicy {
+    return { ...this.policy };
+  }
+
+  /**
+   * Get enhanced pending requests with categories and summaries
+   */
+  getEnhancedPendingRequests(): EnhancedRequest[] {
+    return Array.from(this.requests.values()).map(req =>
+      enhanceRequest(this.serializeRequest(req), {
+        maxValueEth: this.policy.maxValueEth,
+        expectedChainId: this.policy.chainId,
+      })
+    );
+  }
+
+  /**
+   * Approve the next pending request (FIFO order)
+   * Returns the approved request or null if queue is empty
+   */
+  async approveNext(): Promise<{ id: string; method: string; result: unknown } | null> {
+    const requests = Array.from(this.requests.values());
+    if (requests.length === 0) return null;
+
+    // Sort by timestamp to get oldest first
+    requests.sort((a, b) => a.timestamp - b.timestamp);
+    const next = requests[0];
+
+    const result = await this.approveRequest(next.id);
+    return { id: next.id, method: next.method, result };
+  }
+
+  /**
+   * Reject the next pending request (FIFO order)
+   * Returns the rejected request or null if queue is empty
+   */
+  rejectNext(reason?: string): { id: string; method: string } | null {
+    const requests = Array.from(this.requests.values());
+    if (requests.length === 0) return null;
+
+    // Sort by timestamp to get oldest first
+    requests.sort((a, b) => a.timestamp - b.timestamp);
+    const next = requests[0];
+
+    this.rejectRequest(next.id, reason);
+    return { id: next.id, method: next.method };
+  }
+
+  /**
+   * Wait until the queue is idle (no new requests for settleMs)
+   */
+  async waitForIdle(settleMs: number = 300, timeoutMs: number = 15000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      // If there are pending requests, wait a bit
+      if (this.requests.size > 0) {
+        await new Promise(r => setTimeout(r, 100));
+        continue;
+      }
+
+      // Wait settleMs to see if any new requests come in
+      const startSize = this.requests.size;
+      await new Promise(r => setTimeout(r, settleMs));
+
+      // If still no requests, we're idle
+      if (this.requests.size === startSize && this.requests.size === 0) {
+        return true;
+      }
+    }
+
+    return false; // Timeout
+  }
+
+  /**
+   * Check if a request should be auto-approved based on policy
+   */
+  private shouldAutoApprove(request: WalletRequest): { approve: boolean; reason?: string } {
+    const policy = this.policy;
+
+    // Manual mode = never auto-approve
+    if (policy.mode === 'manual') {
+      return { approve: false, reason: 'Policy mode is manual' };
+    }
+
+    const method = request.method;
+
+    // Check deny list first
+    if (policy.denyMethods?.includes(method)) {
+      return { approve: false, reason: `Method ${method} is in deny list` };
+    }
+
+    // Check allow list
+    if (policy.allowMethods?.includes(method)) {
+      return { approve: true };
+    }
+
+    // For transactions, check value and address constraints
+    if (method === 'eth_sendTransaction' && request.params[0]) {
+      const txParams = request.params[0] as TransactionParams;
+
+      // Check value cap
+      if (txParams.value) {
+        const valueWei = BigInt(txParams.value);
+        const maxWei = BigInt(Math.floor((policy.maxValueEth ?? 0) * 1e18));
+        if (valueWei > maxWei) {
+          return { approve: false, reason: `Transaction value exceeds max (${policy.maxValueEth} ETH)` };
+        }
+      }
+
+      // Check address allowlist
+      if (txParams.to && policy.allowTo && policy.allowTo.length > 0) {
+        if (!policy.allowTo.includes(txParams.to)) {
+          return { approve: false, reason: 'Recipient not in allow list' };
+        }
+      }
+
+      // Check address denylist
+      if (txParams.to && policy.denyTo?.includes(txParams.to)) {
+        return { approve: false, reason: 'Recipient is in deny list' };
+      }
+    }
+
+    // Default: don't auto-approve unknown methods
+    return { approve: false, reason: `Method ${method} not in allow list` };
+  }
+
+  /**
+   * Drain all pending requests according to policy until idle
+   * This is the main high-level method for LLM usage
+   */
+  async drainRequests(options: DrainOptions = {}): Promise<DrainResult> {
+    const {
+      policy = this.policy,
+      timeoutMs = 15000,
+      settleMs = 300,
+      maxDepth = 50,
+    } = options;
+
+    // Temporarily override policy if provided
+    const originalPolicy = this.policy;
+    if (options.policy) {
+      this.policy = { ...originalPolicy, ...policy };
+    }
+
+    const approved: DrainResult['approved'] = [];
+    const rejected: DrainResult['rejected'] = [];
+
+    const deadline = Date.now() + timeoutMs;
+    let depth = 0;
+    let lastActivityTime = Date.now();
+
+    try {
+      while (Date.now() < deadline && depth < maxDepth) {
+        // Check for pending requests
+        const pending = Array.from(this.requests.values());
+
+        if (pending.length === 0) {
+          // Wait to see if we're truly idle
+          const timeSinceActivity = Date.now() - lastActivityTime;
+          if (timeSinceActivity >= settleMs) {
+            // We're idle
+            return {
+              status: 'idle',
+              approved,
+              rejected,
+              finalState: await this.getContext(),
+            };
+          }
+
+          // Wait a bit and check again
+          await new Promise(r => setTimeout(r, Math.min(100, settleMs - timeSinceActivity)));
+          continue;
+        }
+
+        // Process oldest request first
+        pending.sort((a, b) => a.timestamp - b.timestamp);
+        const request = pending[0];
+        depth++;
+        lastActivityTime = Date.now();
+
+        const category = categorizeMethod(request.method);
+        const decision = this.shouldAutoApprove(request);
+
+        if (decision.approve) {
+          try {
+            const result = await this.approveRequest(request.id);
+            const approvedItem: DrainResult['approved'][0] = {
+              id: request.id,
+              method: request.method,
+              category,
+              result,
+            };
+
+            // Extract txHash if it's a transaction
+            if (request.method === 'eth_sendTransaction' && typeof result === 'string' && result.startsWith('0x')) {
+              approvedItem.txHash = result;
+            }
+
+            approved.push(approvedItem);
+          } catch (error) {
+            // If approval fails, record as rejected
+            rejected.push({
+              id: request.id,
+              method: request.method,
+              category,
+              reason: error instanceof Error ? error.message : 'Unknown error',
+            });
+          }
+        } else {
+          try {
+            this.rejectRequest(request.id, decision.reason);
+            rejected.push({
+              id: request.id,
+              method: request.method,
+              category,
+              reason: decision.reason ?? 'Rejected by policy',
+            });
+          } catch (error) {
+            // Request might have been handled already
+          }
+        }
+      }
+
+      // Determine exit status
+      const status: DrainResult['status'] = depth >= maxDepth ? 'maxDepth' : 'timeout';
+
+      return {
+        status,
+        approved,
+        rejected,
+        finalState: await this.getContext(),
+      };
+    } finally {
+      // Restore original policy
+      if (options.policy) {
+        this.policy = originalPolicy;
+      }
+    }
+  }
+
+  /**
+   * Get unified wallet context
+   */
+  async getContext(): Promise<WalletContext> {
+    const wallet = this.wallet;
+    const chainId = wallet.getChainId();
+
+    // Map common chain IDs to names
+    const chainNames: Record<number, string> = {
+      1: 'mainnet',
+      5: 'goerli',
+      11155111: 'sepolia',
+      31337: 'anvil',
+      137: 'polygon',
+      42161: 'arbitrum',
+      10: 'optimism',
+      8453: 'base',
+    };
+
+    return {
+      active: {
+        address: wallet.getAddress(),
+        accountIndex: wallet.getAccountIndex(),
+      },
+      chain: {
+        chainId,
+        name: chainNames[chainId] ?? `chain-${chainId}`,
+      },
+      balances: {
+        eth: await wallet.getBalance(),
+      },
+      policy: this.getPolicy(),
+      pendingCount: this.requests.size,
+      pendingSummary: this.getEnhancedPendingRequests(),
+    };
   }
 }
