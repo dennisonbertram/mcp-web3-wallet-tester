@@ -57,7 +57,7 @@ async function main() {
 
   // Create MCP server and Express app
   const mcpServer = createMcpServer(wallet, queue);
-  const app = createExpressApp(mcpServer);
+  const app = createExpressApp(mcpServer, wallet, queue);
 
   // Start HTTP server
   const httpServer = app.listen(config.mcpPort, () => {

@@ -30,7 +30,7 @@ COMMANDS:
   help          Show this help message
 
 OPTIONS:
-  --port, -p    MCP server port (default: 3000)
+  --port, -p    MCP server port (default: 3001)
   --ws-port     WebSocket bridge port (default: 8546)
   --anvil-url   Anvil RPC URL (default: http://127.0.0.1:8545)
   --account     Anvil account index 0-9 (default: 0)
@@ -54,7 +54,7 @@ EXAMPLES:
 QUICK START:
   1. Start Anvil:     anvil
   2. Start server:    web3-wallet-tester
-  3. Register MCP:    claude mcp add --transport http wallet-tester http://localhost:3000/mcp
+  3. Register MCP:    claude mcp add --transport http wallet-tester http://localhost:3001/mcp
 
 For more information, see: https://github.com/your-repo/mcp-web3-wallet-tester
 `;
@@ -71,7 +71,7 @@ interface CliOptions {
 function parseArgs(args: string[]): CliOptions {
   const options: CliOptions = {
     command: 'start',
-    port: 3000,
+    port: 3001,
     wsPort: 8546,
     anvilUrl: 'http://127.0.0.1:8545',
     accountIndex: 0,
