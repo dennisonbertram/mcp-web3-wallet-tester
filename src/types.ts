@@ -262,6 +262,130 @@ export const DEFAULT_CONFIG: WalletServerConfig = {
 };
 
 /**
+ * Request category for semantic grouping
+ */
+export type RequestCategory = 'connect' | 'read' | 'sign' | 'transaction' | 'chain' | 'unknown';
+
+/**
+ * Risk flags for request analysis
+ */
+export type RiskFlag = 'high_value' | 'unknown_contract' | 'chain_mismatch' | 'data_present' | 'first_interaction';
+
+/**
+ * Enhanced request with semantic information
+ */
+export interface EnhancedRequest extends SerializedWalletRequest {
+  category: RequestCategory;
+  summary: string;
+  decoded?: {
+    to?: string;
+    valueEth?: string;
+    functionName?: string;
+    args?: Record<string, unknown>;
+  };
+  risk: RiskFlag[];
+}
+
+/**
+ * Wallet approval policy configuration
+ * Controls which requests are auto-approved vs require manual approval
+ */
+export interface WalletPolicy {
+  /** Policy mode: 'manual' requires approval for all, 'auto' uses rules below */
+  mode: 'manual' | 'auto';
+  /** Methods to auto-approve (e.g., ['eth_chainId', 'eth_requestAccounts']) */
+  allowMethods?: string[];
+  /** Methods to always reject */
+  denyMethods?: string[];
+  /** Maximum ETH value to auto-approve (transactions above this require manual approval) */
+  maxValueEth?: number;
+  /** Contract addresses to auto-approve */
+  allowTo?: `0x${string}`[];
+  /** Contract addresses to always reject */
+  denyTo?: `0x${string}`[];
+  /** Expected chain ID (reject mismatches) */
+  chainId?: number;
+}
+
+/**
+ * Default policy - safe defaults for LLM agents
+ * Auto-approves reads and connects, requires manual approval for value transfers
+ */
+export const DEFAULT_POLICY: WalletPolicy = {
+  mode: 'auto',
+  allowMethods: [
+    'eth_chainId',
+    'eth_accounts',
+    'eth_requestAccounts',
+    'eth_blockNumber',
+    'eth_gasPrice',
+    'eth_getBalance',
+    'eth_getTransactionCount',
+    'eth_estimateGas',
+    'net_version',
+    'wallet_switchEthereumChain',
+    'wallet_addEthereumChain',
+  ],
+  denyMethods: [],
+  maxValueEth: 0.1,
+};
+
+/**
+ * Result of draining the request queue
+ */
+export interface DrainResult {
+  status: 'idle' | 'timeout' | 'maxDepth';
+  approved: Array<{
+    id: string;
+    method: string;
+    category: RequestCategory;
+    txHash?: string;
+    result?: unknown;
+  }>;
+  rejected: Array<{
+    id: string;
+    method: string;
+    category: RequestCategory;
+    reason: string;
+  }>;
+  finalState: WalletContext;
+}
+
+/**
+ * Options for draining requests
+ */
+export interface DrainOptions {
+  /** Policy to apply (defaults to current policy) */
+  policy?: WalletPolicy;
+  /** Timeout in ms (default: 15000) */
+  timeoutMs?: number;
+  /** Time with no new requests to consider idle (default: 300) */
+  settleMs?: number;
+  /** Maximum requests to process (default: 50) */
+  maxDepth?: number;
+}
+
+/**
+ * Unified wallet context - all state in one call
+ */
+export interface WalletContext {
+  active: {
+    address: `0x${string}`;
+    accountIndex: number;
+  };
+  chain: {
+    chainId: number;
+    name: string;
+  };
+  balances: {
+    eth: string;
+  };
+  policy: WalletPolicy;
+  pendingCount: number;
+  pendingSummary: EnhancedRequest[];
+}
+
+/**
  * Get configuration from environment variables with defaults
  */
 export function getConfig(): WalletServerConfig {
